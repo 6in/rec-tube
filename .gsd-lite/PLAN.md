@@ -711,6 +711,113 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
     - A: README（対象: `README.md`）
     - B: verify スクリプト 5 本 + final-check 仕上げ（対象: `scripts/*`）
 
+### verify round 1 の差し戻し（turn 14）
+
+検証結果は `.gsd-lite/VERIFICATION.md` の round 1。実機録音は許可が無く未実施（人の操作が要る。VERIFICATION §3）。
+F1〜F3 は許可と独立に進められる。**無人ターンの作法**は上と同じ（`swift build` / `swift test` を素で、
+`swift build --build-tests --scratch-path .build/<名前>` で warning 0 を見る、録音を直に待たない）。
+
+#### F タスク共通の期待結果（この表だけが正。各 F の完了基準とテストはこの表の行番号を参照し、exit コード等を別の場所に書かない）
+
+| # | 条件 | exit | stdout | stderr |
+|---|---|---|---|---|
+| E1 | `--url` 録音中にタブを閉じる（probe が `gone`） | 6 | なし | 停止理由 1 行（タブが閉じられた旨）→ 保存先 1 行（ファイルが残る場合） |
+| E2 | `--url` で 60 秒以内に完全な状態が来ない | 6 | なし | 停止理由 1 行。最後に見た probe の要約（`none` / `loading` / 欠測）を含む |
+| E3 | 録音開始後に応答なしが 20 秒 | 6 | なし | 停止理由 1 行 → 保存先 |
+| E4 | 出力デバイス変更 / スリープ / coreaudiod 再起動 / IO 異常停止 / デバイス消失 / tap 故障 | 5 | なし | 停止理由 1 行（6 つのどれかが読み分けられる）→ 保存先 |
+| E5 | 書き込みエラー（`RecordingPipeline.onWriteError`） | 7 | なし | 停止理由 1 行 + `firstWriteError` の内容 → 保存先 |
+| E6 | SIGINT / SIGTERM / SIGHUP | 130 / 143 / 129 | なし | 停止理由 1 行（シグナル名）→ 保存先 |
+| E7 | 再生終了 / 次の動画へ遷移 | 0 | なし | 停止理由 1 行 → 保存先 1 行（絶対パス） |
+| E8 | 終了時に全編無音（どのモード・どの停止理由でも） | 停止理由の code が 0 なら 4、非 0 ならそれ | なし | 上の行に加えて `Messages.silent`。**許可の確認方法**（設定の場所と `scripts/verify-permission.sh`）を含む |
+| E9 | system / app モードで無音が 5 秒続く | 継続 | なし | `Messages.silenceWarning`。30 秒以内は再警告なし（`--url` と同じ `Tuning` の規則） |
+| E10 | probe の `playErr` が非 nil（自動再生拒否） | 継続 | なし | 自動再生が拒否された旨を 1 セッションに 1 回だけ。`playErr` の名前を含む |
+| E11 | スリープ通知（`systemWillSleep`） | 5 | なし | **`acknowledge` より前に** `writer.close()` まで終わっている（`FakePowerSource` が ack の時刻と `FakeWriter.closed` の順序を観測） |
+| E12 | `ad` → `main loading` または `main paused` → `main playing` | 継続 | なし | 最後の `main playing` で `rewindThenOpenGate`（`openGate` ではない）。`ad` → `ad` → `main playing` も同じ |
+| E13 | stderr が閉じている（`2>&-`）で usage エラー | 1 | なし | なし（SIGABRT にならない） |
+| E14 | stdout / stderr のパイプの読み手が先に閉じる | 本来の exit コード（録音中なら続行して本来の終わり方） | なし | なし（SIGPIPE で死なない。出力の失敗は黙って捨てる） |
+| E15 | 録音開始後に `fail()` の経路（JS 許可オフ等）で終わり、1 フレームも書いていない | 2（原因の code） | なし | 原因 1 行 + `Messages.noData`。0 バイトの m4a を残さない |
+| E16 | `-o ''` | 1 | なし | usage エラー（出力先が空） |
+| E17 | `-o <既存のディレクトリ>` または末尾が `/` | 録音 | なし | そのディレクトリに既定名（`rec-<日時>` / タイトル）で `.m4a` を作る |
+| E18 | `-o x.wav`（`m4a` 以外の拡張子） | 1 | なし | usage エラー（拡張子は `m4a` のみ。無ければ付ける） |
+| E19 | `swift .gsd-lite/logs/rec-cli-hardening/scratch/turn-014-probe.swift`（堅牢性の格子の回帰） | — | 各行の exit が round 1 と同じ。`bogus-stderr-closed` が `exit=1`、`list-stdout-closedpipe` が `exit=0`、`TRACEBACK!` 0 件 | — |
+
+- [ ] F1: 停止理由・警告の出力、停止の順序、policy の訂正（要件の取りこぼし。VERIFICATION §4「要件の取りこぼし」）
+  - 完了基準:
+    - `Messages.swift` に停止理由ごとの 1 行（`static func stopReason(_: StopReason) -> String`。15 case すべて。`default` を書かない）と
+      保存先の 1 行（`static func savedTo(_ url: URL) -> String`）、自動再生拒否の 1 行（`autoplayRejected(name:)`）を足す。
+      `Messages.silent` の末尾に許可の確認方法（システム設定の場所 + `scripts/verify-permission.sh`）を足す
+    - `RecordingSession.finish(reason)`: **どの理由でも**停止理由の 1 行を出す。`.writeFailed` は `pipeline.firstWriteError` の内容を続ける。
+      ファイルが残るときは最後に保存先の 1 行（絶対パス）。順序は「停止理由 → write エラー → noData / silent → liveStream → 保存先」（表 E1〜E8）
+    - `.pageUnavailable` の 1 行に最後の probe の要約を含める（`RecordingSession` が直近の `ProbeOutcome` を 1 語で覚える: `none` / `loading` / `欠測`）（E2）
+    - スリープ: `StopCoordinator` に **dispatch しない受付** `claim(_ reason: StopReason) -> Bool` を足し（`request` は `claim` + `queue.async` に書き直す）、
+      `RecordingSession` の `PowerWatcher` handler は（セッションキュー上で呼ばれるので）`claim(.sleep)` が true なら**その場で `finish(.sleep)` を同期に通す**。
+      これで `PowerWatcher.receive` の `defer { acknowledge }` が close の後になる（E11）。`StopCoordinatorTests` に `claim` の先勝ちを 1 本
+    - system / app モード: セッションキューの `DispatchSourceTimer`（間隔 `Tuning.meterWindowSeconds`）で `ioQueue.sync { meter?.snapshot }` を読み、
+      `consecutiveSilentSeconds >= Tuning.silenceWarnAfterSeconds` で `Messages.silenceWarning`、再警告は `Tuning.silenceWarnIntervalSeconds` 超のときだけ
+      （`SessionPolicy.silenceWarning` と同じ規則。判定の関数を `SessionPolicy` から切り出して共用してよい）（E9）
+    - `SessionPolicy`: (1) `playErr` が非 nil なら `.warn(Messages.autoplayRejected(name:))` を 1 セッションに 1 回だけ（b5 の警告列の先頭。
+      PLAN #10 に行を足す）（E10）。(2)「直前が ad」を「**ad を見てから `main playing` をまだ見ていない**」に改める
+      （`pendingAdResume` 旗: `.ad` で立て、`rewindThenOpenGate` を出したら下ろす。`main loading` / `main paused` では下ろさない）（E12）。
+      PLAN #10 の表の下に訂正として書く
+    - テスト: `RecordingSessionTests` に E1 / E5 / E6 / E7 / E11 / E15 の各経路で `sink.allMessages` の内容（停止理由の行 → 保存先の行の順）を確認する本を足す。
+      `SessionPolicyTests` に E10（1 回だけ）と E12（`ad → main loading → main playing` / `ad → main paused → main playing` / `ad → ad → main playing`）を足す。
+      system モードの無音警告（E9）は `FakeHAL.emit` で全ゼロを 6 窓分流して `sink.allMessages` に 1 回だけ出ることを見る
+    - `swift test` green、`swift build --build-tests --scratch-path .build/f1` で warning 0、`rg '^[^/]*\bexit\(' Sources/RecCore` が 0
+  - 対象: `Sources/RecCore/Messages.swift`, `Sources/RecCore/RecordingSession.swift`, `Sources/RecCore/StopCoordinator.swift`, `Sources/RecCore/SessionPolicy.swift`,
+    `Tests/RecCoreTests/RecordingSessionTests.swift`, `Tests/RecCoreTests/SessionPolicyTests.swift`, `Tests/RecCoreTests/StopCoordinatorTests.swift`, `.gsd-lite/PLAN.md`（#10 の訂正）
+  - 依存: なし
+  - 並列サブ作業: A: `Messages` + `RecordingSession` + `StopCoordinator` + `RecordingSessionTests`（親が `Messages` の署名を先に確定させる）/
+    B: `SessionPolicy` + `SessionPolicyTests`（表 E10 / E12 と PLAN #10 の訂正文だけを渡す）
+
+- [ ] F2: 出力経路の堅牢性（stderr / stdout の失敗で死なない）、`fail()` の後始末、`-o` の分解、小さな修正とテストの補強（VERIFICATION §4「堅牢性」）
+  - 完了基準:
+    - 人向け出力の口を 1 つにする: `Sources/RecCore/Console.swift` に `public func writeStderr(_ line: String)`（`fputs` か `write(2)` のループ。
+      **失敗は無視する**。`FileHandle.write(_:)` を使わない）。`RecordingSession` の既定 `onMessage`、`Sources/rec/main.swift` の catch、
+      `Sources/rec-probe/main.swift` の stderr 出力をすべてこれに置き換える。`rg -n 'standardError\.write' Sources` が 0
+    - `Sources/rec/main.swift` と `Sources/rec-probe/main.swift` の先頭で `signal(SIGPIPE, SIG_IGN)`（`--list` の `print` は失敗しても落ちない）（E13 / E14）
+    - `RecordingSession.fail()` は `finish` と同じ出力の後始末（`framesWritten == 0` → 削除 + `Messages.noData`。無音判定も同じ）を通す
+      （実装は `finish` と共通の private 関数に寄せる）（E15）
+    - `-o` の分解を `Sources/rec/main.swift` から `Sources/RecCore/CLI.swift` へ移す（`public func splitOutputPath(_ path: String) throws -> SessionOutput`）:
+      空文字列は `.usage`（E16）、末尾 `/` または存在するディレクトリはそのディレクトリ + `explicitBaseName: nil`（E17）、拡張子が `m4a` 以外なら `.usage`、無ければ `m4a`（E18）。
+      `CLITests` に E16 / E17 / E18 と `a.b.m4a`（base `a.b`）/ `dir/sub.m4a` を足す
+    - `ScriptRunner`: `DataBox` を `NSLock` で守る（読み書きとも）。2 秒の猶予 2 つを `Tuning.osascriptKillGraceSeconds` / `Tuning.osascriptPipeGraceSeconds` に移す
+    - `SilenceMeter.ingest`: `buf.format.isInterleaved` のときは stride = `channelCount` で読む（`vDSP` の stride 引数で足りる）。
+      `SilenceMeterTests` に interleaved の 1 本と、512 フレームのバッファで 2.5 窓ぶん流す窓またぎの 1 本、gate 開 / 閉が混じる窓の 1 本
+    - `sanitizeFileName`: 200 バイトで切った後にもう一度末尾の空白 / ピリオドを落とす。`OutputPathTests` に「あ」×100 → 66 文字 / 198 バイト と、
+      基底 + 結合文字が 200 バイト目をまたぐ素材、切った後に末尾が空白になる素材を足す
+    - `ProbeResultTests` の JS キー照合を `JSON.stringify({...})` のリテラルからキーを抜き出して集合比較する形に直す（部分文字列をやめる）
+    - 回帰: `swift .gsd-lite/logs/rec-cli-hardening/scratch/turn-014-probe.swift` を回して表 E19 のとおり。`swift test` green、
+      `swift build --build-tests --scratch-path .build/f2` で warning 0、`rg -n -e '-60\.0' -e '-50\.0' -e '0\.7' -e '3\.0' Sources -g '!Tuning.swift' -g '!Sources/rec-probe/**'` が 0
+  - 対象: `Sources/RecCore/Console.swift`（新規）, `Sources/rec/main.swift`, `Sources/rec-probe/main.swift`, `Sources/RecCore/RecordingSession.swift`, `Sources/RecCore/CLI.swift`,
+    `Sources/RecCore/ScriptRunner.swift`, `Sources/RecCore/Tuning.swift`, `Sources/RecCore/SilenceMeter.swift`, `Sources/RecCore/OutputPath.swift`,
+    `Tests/RecCoreTests/CLITests.swift`, `Tests/RecCoreTests/SilenceMeterTests.swift`, `Tests/RecCoreTests/OutputPathTests.swift`, `Tests/RecCoreTests/ProbeResultTests.swift`
+  - 依存: F1（`RecordingSession.finish` / `fail` の共通化は F1 の後に行う。F1 と同じターンで続けてよい）
+  - 並列サブ作業: A: `Console` + `main.swift` 2 本 + `fail()` + `CLI.splitOutputPath` + `CLITests` / B: `ScriptRunner` + `SilenceMeter` + `OutputPath` + 3 つのテスト補強
+
+- [ ] F3: 文書とスクリプトの整合（VERIFICATION §4「文書・スクリプト」。すべて 1 タスクにまとめる）
+  - 完了基準:
+    - `git show main:rec.swift` → `git show 45301d8:rec.swift`（`rec.swift` は main に無い。`git log --diff-filter=A -- rec.swift` で確認）。
+      README 7 行目、`CLI.swift` / `ScriptRunner.swift` / `AudioFileWriter.swift`（2）/ `HAL.swift` / `ChromeController.swift` / `TapRecorder.swift` / `rec-probe/main.swift` のコメント、
+      `scripts/final-check.sh` の fail 文言。`rg -n 'main:rec\.swift' README.md Sources Tests scripts` が 0
+    - `scripts/verify-permission.sh`: 段 1 と段 2 の間、`Tests/Fixtures/main.wav` を `afplay` でバックグラウンド再生する（無ければ先に `swift run rec-probe tones Tests/Fixtures`）。
+      終了時に `afplay` を kill。判定文で exit 4（音が入らない）と exit 8（許可なし）を読み分ける。README「検証」の該当行に「スクリプトが自分でトーンを鳴らす」と書く
+    - `scripts/verify-adtest.sh` と README「自動再生の段階的対処」: 判定を「rec の stderr に自動再生拒否の行（F1 の E10）がある」に改め、exit コードに依存しない
+      （自動再生が拒否されると `main paused` のまま録音が終わらず 180 秒で打ち切り exit 143 になる、と書く）
+    - `scripts/verify-helper-restart.sh`（コメント・本文）と README 148 行目: `pkill -f 'Google Chrome Helper.*audio\.mojom\.AudioService'`。
+      allowlist の `Bash(pkill -f audio.mojom.AudioService)` はスクリプト内の呼び出しには関係しないので変更不要（README に注記）
+    - `python3 -m http.server 8765 --bind 127.0.0.1 --directory Tests/Fixtures`（README 172 行目と `verify-adtest.sh` 76 行目）
+    - `scripts/final-check.sh`: `-g '!Sources/rec-probe/**'`（`rg` の `-g` はパス全体に当てる。実測: `!rec-probe/**` は除外しない）、
+      数値リテラルの正規表現を `(^|[^0-9.])0\.7([^0-9]|$)` の形で前後を縛る。F1 で足した `Messages` の行が README「終了コード」表の「主な StopReason」と矛盾しないことを目視
+    - README「既知の制約」に 3 行: Chrome を終了していると `--url` が Chrome を起動してしまい `gone` で exit 6 になる / poll 中の osascript（最大 15 秒）の間はシグナル処理が遅れる /
+      終了処理中は 2 度目の Ctrl-C が効かない（SIGKILL なら止まるが m4a は壊れる）。README「許可」1 に「全編無音 → exit 4 の症状と `scripts/verify-permission.sh`」を 1 行
+    - 決めた事項 #2 の本文を訂正（「running になるまで待つ」は T8 で作らないと決めた。根拠は T8 実測 (7)。許可後の実機で (b)(c)(d) を測るのは変わらず）
+    - `Sources/RecCore/SignalWatcher.swift` のコメントからローカルの作業ディレクトリのパスを消す（出典名だけ残す）
+    - `rg -n 'rec\.swift:[0-9]' Sources README.md` が 0、`ls scripts/verify-*.sh` の本数 == README の一覧行数、`bash -n` 相当（E19 の driver が `scripts/*.sh` に `bash -n` を回す）がすべて exit 0
+  - 対象: `README.md`, `scripts/verify-permission.sh`, `scripts/verify-adtest.sh`, `scripts/verify-helper-restart.sh`, `scripts/final-check.sh`,
+    `Sources/RecCore/{CLI,ScriptRunner,AudioFileWriter,HAL,ChromeController,TapRecorder,SignalWatcher}.swift`, `Sources/rec-probe/main.swift`, `.gsd-lite/PLAN.md`（#2 の訂正）
+  - 依存: F1（E10 の文言を参照する）
+  - 並列サブ作業: A: README + PLAN #2 / B: scripts 4 本 + コメント掃除
+
 ## 決めた事項
 
 1. **allowlist**（ユーザーが `.claude/settings.json` に追加する。plan ターンの Edit は権限拒否。一覧は BLOCKED.md と同一）: `Bash(swift:*)`, `Bash(env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift:*)`,
@@ -783,6 +890,13 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
    | gate 開 かつ `consecutiveSilentSeconds ≥ 5`（30 秒以内に未警告） | `warn("無音が続いています")` |
    | `RecorderEvent`（セッションが直接 coordinator へ） | `.defaultOutputChanged → .deviceChanged`, `.ioStoppedAbnormally → .ioStopped`, `.deviceDied → .deviceDied`, `.serviceRestarted → .serviceRestarted`, `.overload` はログのみ |
    | スリープ / シグナル / write エラー | `.sleep` / `.signal(sig)` / `.writeFailed` |
+
+   **verify round 1 の訂正（turn 14。F1 が実装する）**:
+   - 行を 1 つ足す: 「probe の `playErr` が非 nil（未警告） → `warn(自動再生が拒否された: <playErr>)`。1 セッションに 1 回」（b5 の警告列の先頭）
+   - 「`kind == main && state == playing`（直前が ad）」の「直前」は **probe 1 回前ではなく「ad を見てから `main playing` をまだ見ていない」**
+     （間に `main loading` / `main paused` / `ad` が何回挟まっても `rewindThenOpenGate`）。根拠: 広告明けの再バッファで `loading` が 1 回挟まるだけで
+     巻き戻しが消え、広告開始で捨てた約 1 秒が戻らない（境界の欠落が許容 1 秒を超える）
+   - 停止理由はどれも stderr に 1 行出す（表の行動には書いていなかったが、受け入れ基準「原因が分かるメッセージ」の対象）
 
 11. **タブの後始末**: 自分で開いたウィンドウのタブを閉じるのは `.ended` / `.nextVideo` / `.liveStream` のとき。シグナル・エラー・中断では閉じない（現行動作 rec.swift:252 を維持）
 12. **ローカル検証ページ**（`Tests/Fixtures/adtest.html`）: `<div id="movie_player"><video id="v" src="main.wav"></video></div>`。進行: 本編 0→4 秒 → 広告 4 秒
