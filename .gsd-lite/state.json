@@ -19,8 +19,8 @@
     "path": "."
   },
   "milestone": "rec-cli-hardening",
-  "phase": "blocked",
-  "next_command": "BLOCKED",
+  "phase": "impl",
+  "next_command": "/gsd-lite-impl",
   "branch": {
     "name": "gsd-lite/rec-cli-hardening",
     "base": "main"
@@ -47,5 +47,5 @@
     "verify": "claude-fable-5-1",
     "reflect": "claude-fable-5-1"
   },
-  "updated_at": "2026-11-04T18:25:58+09:00"
+  "updated_at": "2026-11-04T19:24:34+09:00"
 }
