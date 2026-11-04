@@ -348,3 +348,4 @@
   `TapRecorder` の watchdog が 10 秒で `.coreAudio` を返して終わるので、
   **その項目は「未実施」として PROGRESS に書いて T11 のスクリプトに委ねる**（PLAN T9 にその指示がある）。
   Chrome の **JS 許可**（表示 > 開発/管理 > Apple Events からの JavaScript）も未確認のまま
+- 承認待ち（ループ計測・turn 10）: 1 件 — Bash: rec
