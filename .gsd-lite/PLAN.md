@@ -93,7 +93,7 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
   - 依存: なし
   - 並列サブ作業: なし（ビルドが通るまで 1 人で回す方が速い）
 
-- [ ] T2: HAL 層と `TapTarget`、`rec-probe` による bundleIDs の実機プローブ（tap の作り方を確定する）
+- [x] T2: HAL 層と `TapTarget`、`rec-probe` による bundleIDs の実機プローブ（tap の作り方を確定する）
   - 完了基準:
     - `Sources/RecCore/HAL.swift`: `check` / `address` / `read` / `readIDs`（Legacy から移動）、`AudioProc`、`audioProcesses()`、
       `enum TapTarget { case system; case processes([AudioObjectID]); case bundleIDs([String], seed: [AudioObjectID]) }`、
@@ -123,6 +123,19 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
     `Tests/RecCoreTests/TapTargetTests.swift`, `.gsd-lite/PLAN.md`（決めた事項 #2 の確定値）
   - 依存: T1
   - 並列サブ作業: なし（プローブ結果を見ながら進める）
+  - **T2 の実測（turn 4）**:
+    - (0) 済み: YouTube 再生中に `running` になる Chrome のバンドル ID は **`com.google.Chrome.helper` だけ**
+      （`com.google.Chrome` は再生中も `no`）。プロセス一覧に出るのはこの 2 名のみ（`.helper.renderer` / `.helper.gpu` 等は出ない）。
+      → `Chrome.bundleIDs = ["com.google.Chrome", "com.google.Chrome.helper"]` に確定（決めた事項 #2）
+    - (a)〜(e) **未実測（許可なし）**: tap と aggregate の作成までは成功するが、
+      **`AudioDeviceCreateIOProcIDWithBlock` が無期限にブロックする**（10 秒の watchdog で打ち切り）。
+      許可ダイアログは出ない（System Events でフォアグラウンドプロセスと全ウィンドウを確認。tccd /
+      UserNotificationCenter に新規プロセスなし）。`system` / `hybrid` の両 variant で同じ、
+      `kAudioAggregateDeviceTapAutoStartKey` を false にしても同じ、Bash のサンドボックスを外しても同じ。
+      → システム音声の取得の許可が**責任プロセス（iTerm2）に降りていない**（RESEARCH §2.5）。
+      PLAN どおり BLOCKED にせず続行。決めた事項 #2 は hybrid のまま。**verify の前に許可が必要**（T11 / メモ参照）
+    - `rec-probe` は `swift run rec-probe …` で呼ぶ（`.build/debug/rec-probe` は allowlist の
+      `Bash(.build/debug/rec:*)` に当たらない。prefix は「完全一致」か「prefix + 空白」でしか当たらないため）
 
 - [ ] T3: 終了コード・エラー型・メッセージ、ファイルライタ、出力パス（純粋ロジック + ユニットテスト）
   - 完了基準:
@@ -209,6 +222,15 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
       `fire(.defaultOutputChanged)` 等 5 種がそれぞれ `onEvent` に届く；**`scripts/test.sh --sanitize=thread --filter TapRecorder` を 1 回回して警告なし**
       （sanitize が Swift Testing で動かなければ PROGRESS に記録して通常実行のみ）
     - Legacy.swift から `Recorder` を削る（`recordLive` / `recordURL` は T9 まで Legacy の `Recorder` を使うので、`LegacyRecorder` に改名して残す）
+    - **PLAN 追記（T2 turn 4 の実測）**: `start()` は**有限時間で必ず戻る**こと。許可が降りていないと
+      `AudioDeviceCreateIOProcIDWithBlock` が**ダイアログも出さずに無期限ブロックする**（T2 の実測欄）。
+      `Tuning.tapStartTimeoutSeconds = 10` を足し、`start()` の本体を別キューで走らせて
+      `DispatchSemaphore.wait(timeout:)` で打ち切り、時間切れなら「許可が降りていない可能性」の案内（`Messages.swift`）
+      とともに `.coreAudio`（exit 8）で throw する（打ち切り後も作成スレッドは残るので、後始末は
+      プロセス終了に任せる = `exit` する側で問題にしない）。`kAudioAggregateDeviceTapAutoStartKey` は
+      **false**（true だと `AudioDeviceStart` が対象が音を出すまで戻らない。RESEARCH §2.1 の原文どおりの挙動）。
+      `rec-probe` の `makeProbeTap` / `ProbeTap` が参考実装。ユニット: `FakeHAL` の `createIOProc` を
+      ブロックさせて、`start()` が timeout で throw し、それまでに作ったものが逆順に destroy されること
   - 対象: `Sources/RecCore/AudioHAL.swift`, `Sources/RecCore/TapRecorder.swift`, `Sources/RecCore/Legacy.swift`, `Tests/RecCoreTests/Fakes/FakeHAL.swift`, `Tests/RecCoreTests/TapRecorderTests.swift`
   - 依存: T2, T4
   - 並列サブ作業:
@@ -348,7 +370,12 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
       終了コード表（決めた事項 #3 と同一）、既知の制約（他タブの音の混入（D5）、SSAI 時の精度低下、SIGKILL / 電源断で m4a が壊れる、手動一時停止を自動再生してしまう（A3）、
       ライブ配信非対応、出力デバイス切替・スリープで停止して保存（自動復旧なし）、`--url` は `<video>` のあるページをベストエフォート・広告判定は YouTube のみ、
       macOS 26 以上）、検証スクリプト一覧（本数を書く）、ローカル検証ページの使い方と自動再生の対処
-    - `scripts/verify-permission.sh`（2 秒のシステム全体録音 → `rec-probe analyze --silence` → 全ゼロなら許可案内を出して exit 1。B5）、
+    - `scripts/verify-permission.sh`（2 秒のシステム全体録音 → `rec-probe analyze --silence` → 全ゼロなら許可案内を出して exit 1。B5）。
+      **T2 turn 4 の実測を反映**: 許可が無いときは「全ゼロ」ではなく**録音開始が無期限にブロックする**（ダイアログも出ない）。
+      このスクリプトは最初に `swift run rec-probe tap system 2`（内部 10 秒 watchdog, exit 8）で**開始できるか**を見て、
+      exit 8 なら「システム音声の取得の許可」案内（**責任プロセスはターミナルアプリ = iTerm2**。
+      システム設定 > プライバシーとセキュリティ > システム音声の録音 で iTerm2 を許可し、**iTerm2 を再起動**する。
+      RESEARCH §2.5 / §5.1「許可変更はホストアプリ再起動後に反映」）を出して exit 1、その後に全ゼロ判定を行う
       `scripts/verify-signals.sh`（INT / TERM / HUP それぞれ: 3 秒録音 → kill → exit 130/143/129 と `afinfo` duration ≥ 2 秒。P2）、
       `scripts/verify-youtube.sh [URL]`（既定 `https://www.youtube.com/watch?v=jNQXAC9IVRw`。完走で exit 0、`afinfo` duration > 0、出力名がタイトル由来）、
       `scripts/verify-helper-restart.sh [URL]`（録音 10 秒後に `pkill -f audio.mojom.AudioService` → 完走後 `rec-probe analyze` で後半にも可聴窓がある。L1 (c)）、
@@ -375,8 +402,13 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
    （無人ループ中にスリープや Chrome 設定を変えない。スリープ検証は VERIFICATION に「手動確認」として残す）
 2. **Chrome の tap 対象（T2 が確定して書き換える）**: 初期値 `chromeTapTarget = .bundleIDs(chromeBundleIDs, seed: <起動時に prefix "com.google.Chrome" で一致した running 含む全プロセス>)`
    （hybrid）、`chromeBundleIDs = ["com.google.Chrome", "com.google.Chrome.helper", "com.google.Chrome.helper.renderer", "com.google.Chrome.helper.gpu", "com.google.Chrome.helper.plugin", "com.google.Chrome.helper.alerts"]`
-   （T2 (0) の実測で絞る）。`isProcessRestoreEnabled = true`。録音開始（`TapRecorder.start`）は rec.swift:212-219 と同じく「Chrome の音声プロセスが running になった後」に
-   行う（seed を取るため。bundleIDs 単独で動いてもこの待ちは残す）。T2 の結果: 〔未確定 — T2 が `bundleIDs（seed なし）` / `hybrid` / `processes + restore` のいずれかに書き換える〕
+   （T2 (0) の実測で `["com.google.Chrome", "com.google.Chrome.helper"]` の 2 名に確定。コードは `RecCore.Chrome.bundleIDs`）。`isProcessRestoreEnabled = true`。
+   録音開始（`TapRecorder.start`）は rec.swift:212-219 と同じく「Chrome の音声プロセスが running になった後」に
+   行う（seed を取るため。bundleIDs 単独で動いてもこの待ちは残す）。
+   **T2 の結果（turn 4）: `hybrid`（`bundleIDs` + seed）のまま確定。** (a)〜(e) の音の有無は許可が降りていないため未実測
+   （`AudioDeviceCreateIOProcIDWithBlock` がブロックする。T2 の実測欄）。許可が降りた後に `swift run rec-probe tap bundleids 3` /
+   `hybrid` / `processes` を回して、(b)(c)(d) が全部可なら seed なしに落とす（verify の宿題。VERIFICATION に手動項目として残す）。
+   実測で `running` になるのは `com.google.Chrome.helper` だけなので、seed にはこのヘルパーが必ず入る
 3. **終了コードと停止理由**（根拠: RESEARCH §8-2、audiograb の方式。README の表はこれと同一にする）:
 
    | code | `ExitCode` | 意味 | `StopReason` / 発生箇所 |
@@ -446,6 +478,16 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
 ## メモ
 
 - **振り返り**: `.gsd-lite/reflect/` は空（初回マイルストーン）。反映した提案はなし
+- **【verify 前に必要な人の操作】システム音声の取得の許可**（T2 turn 4 で判明）: tap と aggregate は作れるが
+  `AudioDeviceCreateIOProcIDWithBlock` が**無期限にブロックし、許可ダイアログも出ない**。`system` / `hybrid` 両 variant、
+  `TapAutoStart` false、Bash サンドボックス解除のいずれでも同じ。CLI の責任プロセスはターミナルアプリなので、
+  **システム設定 > プライバシーとセキュリティ > システム音声の録音 で iTerm2（ループを起動した端末）を許可し、iTerm2 を再起動する**
+  必要がある（RESEARCH §2.5、§5.1 catap「許可変更はホストアプリ再起動後に反映」）。
+  これが済むまで T2 (a)〜(e)・T10 の実機トーン検証・T11 の verify-* は実行できない（T1〜T9 の機械検証は影響なし）。
+  **無人ターンの作法**: 録音を開始するコマンドを `swift run` で直に待たない（固まる）。必ず
+  `rec-probe` の 10 秒 watchdog 相当を通すか `run_in_background` にする
+- **`.build` 配下の実行**: `Bash(.build/debug/rec:*)` は allowlist の prefix ルール（完全一致 or prefix + 空白）により
+  `rec` には当たるが `rec-probe` には当たらない。無人ターンは **`swift run rec-probe …`**（`Bash(swift:*)` に当たる）を使う
 - **タスク数 11**: 目安 8〜15 の範囲内。T3 / T4 / T6 / T7 は純粋ロジックで並列サブ作業が効くのでまとめた。T5（HAL 抽象化）と T8（状態機械）は
   テストの契約が独立しているので分けたまま
 - **RESEARCH の「盗める点」採否**:

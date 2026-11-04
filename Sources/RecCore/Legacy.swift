@@ -25,46 +25,7 @@ public struct RecError: Error, CustomStringConvertible {
     }
 }
 
-func check(_ st: OSStatus, _ what: String) throws {
-    if st != noErr { throw RecError(description: "\(what) failed (OSStatus \(st))") }
-}
-
-func address(_ sel: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
-    AudioObjectPropertyAddress(mSelector: sel,
-                               mScope: kAudioObjectPropertyScopeGlobal,
-                               mElement: kAudioObjectPropertyElementMain)
-}
-
-func read<T>(_ id: AudioObjectID, _ sel: AudioObjectPropertySelector, _ initial: T) throws -> T {
-    var addr = address(sel)
-    var size = UInt32(MemoryLayout<T>.size)
-    var value = initial
-    try check(AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value), "get property \(sel)")
-    return value
-}
-
-func readIDs(_ id: AudioObjectID, _ sel: AudioObjectPropertySelector) throws -> [AudioObjectID] {
-    var addr = address(sel)
-    var size: UInt32 = 0
-    try check(AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size), "get size \(sel)")
-    var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
-    try check(AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &ids), "get property \(sel)")
-    return ids
-}
-
-public struct AudioProc {
-    public let id: AudioObjectID
-    public let bundle: String
-    public let running: Bool
-}
-
-public func audioProcesses() throws -> [AudioProc] {
-    try readIDs(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyProcessObjectList).map {
-        let bundle = ((try? read($0, kAudioProcessPropertyBundleID, "" as CFString)) as String?) ?? ""
-        let running = ((try? read($0, kAudioProcessPropertyIsRunningOutput, UInt32(0))) ?? 0) != 0
-        return AudioProc(id: $0, bundle: bundle, running: running)
-    }
-}
+// `check` / `address` / `read` / `readIDs` / `AudioProc` / `audioProcesses()` は T2 で HAL.swift に移した。
 
 // MARK: - Recorder
 

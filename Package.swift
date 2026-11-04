@@ -32,10 +32,22 @@ let package = Package(
                 ])
             ]
         ),
+        // rec-probe も tap を作るので、同じく Info.plist を埋め込む
+        // （NSAudioCaptureUsageDescription が無いと許可が降りず、プローブが「全ゼロ」を
+        // 権限不足と区別できなくなる）。TCC 上で rec と混ざらないよう bundle ID は別にする。
         .executableTarget(
             name: "rec-probe",
             dependencies: ["RecCore"],
-            path: "Sources/rec-probe"
+            path: "Sources/rec-probe",
+            exclude: ["Info.plist"],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/rec-probe/Info.plist",
+                ])
+            ]
         ),
         .testTarget(
             name: "RecCoreTests",
