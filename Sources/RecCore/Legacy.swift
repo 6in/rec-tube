@@ -158,7 +158,10 @@ func chromeTab(_ tabID: String, _ body: String) -> String? {
 }
 
 // 状態: "<ad|main> <ended|paused|playing> <videoId> <currentTime> <duration>" / "none"
-let probeJS = """
+//
+// 旧実装の空白区切りの probe。T7 で `ProbeJS.swift` の `probeJS`（JSON を返す）に置き換わったので、
+// `LegacyRecorder` と同じ理屈で `legacy` を冠して退避した（T9 でこのファイルもろとも消える）。
+let legacyProbeJS = """
 (function(){var v=document.querySelector('video');if(!v)return 'none';\
 var ad=!!document.querySelector('.ad-showing');\
 if(v.paused&&!v.ended){var p=v.play();if(p)p.catch(function(){});}\
@@ -188,7 +191,7 @@ public func recordURL(_ url: String, path: String) throws {
         guard Date() < deadline else {
             throw RecError(code: .pageLost, message: "60秒待っても音が出ませんでした")
         }
-        _ = chromeJS(tab, probeJS)
+        _ = chromeJS(tab, legacyProbeJS)
         Thread.sleep(forTimeInterval: 0.5)
         if try audioProcesses().contains(where: { $0.bundle.hasPrefix(prefix) && $0.running }) {
             targets = try audioProcesses().filter { $0.bundle.hasPrefix(prefix) }.map(\.id)
@@ -199,7 +202,7 @@ public func recordURL(_ url: String, path: String) throws {
     installSigint { rec.stop(); print("\n中断: \(path)") }
 
     // 本編が既に流れていたら頭出し（取りこぼし防止）
-    if let s = chromeJS(tab, probeJS), s.hasPrefix("main") {
+    if let s = chromeJS(tab, legacyProbeJS), s.hasPrefix("main") {
         chromeJS(tab, "(function(){var v=document.querySelector('video');if(v)v.currentTime=0;return 'ok';})()")
     }
 
@@ -207,7 +210,7 @@ public func recordURL(_ url: String, path: String) throws {
     var lastWriting = false
     loop: while true {
         Thread.sleep(forTimeInterval: 0.3)
-        guard let s = chromeJS(tab, probeJS) else { continue }
+        guard let s = chromeJS(tab, legacyProbeJS) else { continue }
         if s == "gone" { print("\nタブが閉じられました"); break }
         let f = s.split(separator: " ").map(String.init)
         guard f.count == 5 else { continue }

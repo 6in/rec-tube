@@ -396,7 +396,7 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
       渡すと「条件として見るか unwrap するか」が曖昧で warning になる（T5 からの持ち越し）。
       比較 1 本で「辞書にある」と「false」を同時に見るので検査の強さは同じ
 
-- [ ] T7: Chrome 制御（`ScriptRunner` / `ChromeController` / probe JS と `ProbeResult`）
+- [x] T7: Chrome 制御（`ScriptRunner` / `ChromeController` / probe JS と `ProbeResult`）
   - 完了基準:
     - `Sources/RecCore/ScriptRunner.swift`: `struct ScriptResult { status: Int32; stdout: String; stderr: String }`、
       `protocol ScriptRunner { func run(script: String, arguments: [String]) throws -> ScriptResult }`、
@@ -426,6 +426,56 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
   - 並列サブ作業:
     - A: ScriptRunner + ChromeController + FakeRunner + テスト（対象: `ScriptRunner.swift`, `ChromeController.swift`, `Fakes/FakeRunner.swift`, `ChromeControllerTests.swift`）
     - B: ProbeJS + ProbeResult + テスト（対象: `ProbeJS.swift`, `ProbeResultTests.swift`）
+  - **T7 の実測（turn 9）**:
+    - **PLAN 訂正: サブ作業の割り方**。共有物（`ScriptRunner.swift` の `ScriptResult` + protocol + `OsascriptRunner`、
+      `Tests/.../Fakes/FakeRunner.swift`）は**親が両方作り**、並列に出したのは 3 本にした:
+      A（`ChromeController.swift` の実装）/ B（`ChromeControllerTests.swift` を契約から独立に記述。
+      実装は読まない）/ C（`ProbeJS.swift` + `ProbeResultTests.swift`）。
+      根拠: T5 turn 7 と同じ「protocol とその test double は同時に書かないと噛み合わない」。
+      結果: **B のテスト 25 本は A の実装に 1 行も手を入れずそのままコンパイル・green**（API サーフェスの食い違い 0 件）
+    - **PLAN 訂正: `Legacy.swift` の `probeJS` を `legacyProbeJS` に改名した**（宣言 + 参照 3 箇所）。
+      根拠: 旧実装の内部トップレベル `let probeJS`（空白区切り 5 フィールドを返す JS）が
+      新しい `public let probeJS` と**同じモジュール内で名前衝突**する（`invalid redeclaration`）。
+      `LegacyRecorder` と同じ扱い（T9 でこのファイルもろとも消える）
+    - 確定した API（T8 / T9 はこの名前で配線する）:
+      `ScriptResult(status:stdout:stderr:)` / `ScriptRunner.run(script:arguments:)` /
+      `OsascriptRunner(executable:timeout:)` + `OsascriptRunner.argumentList(script:arguments:)`；
+      `ChromeController(runner:)` / `checkAutomation() throws` / `open(url:) throws -> String` /
+      `execute(tab:js:) throws -> String?` / `title(tab:) throws -> String?` / `close(tab:)`（throws なし）；
+      `probeJS` / `rewindJS` / `seekToStartJS`（トップレベル `public let`）/ `ProbeKind { main, ad }` /
+      `ProbeState { playing, paused, ended, loading }` / `ProbeResult`（9 プロパティ + `CodingKeys: CaseIterable`）/
+      `ProbeOutcome { none, gone, result(ProbeResult) }` / `parseProbe(_:) -> ProbeOutcome`（throws なし）
+    - 契約の補足（PLAN 本文に無かった点を実装で確定）:
+      (1) **`OsascriptRunner` は stdout / stderr を生のまま返す**（末尾の改行も落とさない）。trim は
+          `ChromeController` の責任。引数列は常に `["-e", script, "--"] + arguments`
+      (2) **`osascript` の打ち切り（既定 `Tuning.osascriptTimeoutSeconds` = 15 秒）は throw せず
+          `ScriptResult(status: -1, stderr: <打ち切りの説明>)` を返す**。「応答なしをエラーにするか待ちにするか」は
+          呼び出し側の判断（`execute` では `nil` に落ち、上位が連続回数で `.pageUnresponsive` を決める）。
+          パイプの読み出しは別スレッドに逃がす（64 KB を超えると読まずに終了を待つと戻らない）
+      (3) `execute` / `title` の判定順は固定: `turned off` / `オフ` → `-1743` → **それ以外の非 0 は
+          throw せず `nil`** → `gone` は `RecError(.pageLost)` → `missing value` / 空は `nil` → それ以外は trim 済み文字列。
+          `title` も `execute` と同じ規則（非 0 は `nil`）
+      (4) `checkAutomation` / `open` の非 0 は `-1743` → `Messages.chromeAutomationPermission`、
+          それ以外 → `"Chrome を制御できません: <stderr の 1 行目>"`（1 行目 = 全体を trim してから改行で分割した先頭）。
+          **`runner.run` 自体の throw は握りつぶさず伝播する**
+      (5) `ProbeResult.live` は **JSON の `live` をそのまま読む**。`dur` が無限だから `live` を true にする
+          Swift 側の推論は入れていない（その判定は JS 側の契約 = 決めた事項 #9）
+      (6) `ProbeKind` / `ProbeState` は raw String の enum。**未知の値はデコード失敗 → `parseProbe` が `.none`**。
+          `ProbeOutcome` に `Equatable` は付けていない（テスト側がパターンマッチの helper を持つ）。
+          `ProbeResult` は `Equatable` だが `dur` が NaN の 2 値は `==` が false になる
+      (7) `len` は JS の `Number(vd.lengthSeconds)` が NaN のとき `JSON.stringify` が `null` にするのに依存して
+          `len: nil` になる（`vd` はあるが `lengthSeconds` が無い場合。JavaScriptCore で実測確認済み）
+    - **T8 への申し送り（#10 の表との橋渡し）**: `execute` はタブ消失で `RecError(.pageLost)` を **throw する**が、
+      決めた事項 #10 の表は `gone` を**入力**に持つ。T8 は probe の呼び出しを `catch` して
+      `RecError(code: .pageLost)` を `ProbeOutcome.gone` として policy に渡すこと（`parseProbe("gone")` も
+      `.gone` を返すので、どちらの経路でも表の `gone` 行に合流する）
+    - **実機の実測（turn 9）**: (a) `osascript -e 'on run argv … return item 1 of argv' -- <値>` の往復を
+      `a"b\c'd%20` と**改行を含む値**で確認 → どちらも生のまま戻る（文字数 7 を AppleScript 側で数えて確認）。
+      §3.1 のエスケープ方針は実機で裏が取れた。(b) **Chrome のオートメーション許可はすでにある**:
+      `timeout 10 osascript -e 'tell application "Google Chrome" to get version'` が `157.0.8103.39` を返した
+      （-1743 は出ない。T2 turn 4 で足りないと分かったのは**システム音声の取得**の許可だけ）。
+      (c) JS 許可（表示 > 開発/管理 > Apple Events からの JavaScript）は**未確認**（タブを開く副作用を
+      無人ターンで起こさないため。verify-permission.sh / T10 で確かめる）
 
 - [ ] T8: `--url` の状態機械（`SessionPolicy`）と `RecordingSession`（オーケストレーション）
   - 完了基準:
