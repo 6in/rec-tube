@@ -130,7 +130,7 @@ final class ProbeTap {
         step("tap created: \(tapID)")
         // catap の記録: 満たせない description では tap ID 0 が返る（RESEARCH §5.1）。
         guard tapID != AudioObjectID(kAudioObjectUnknown), tapID != 0 else {
-            throw RecError(description: "create tap returned tap ID 0 (description を満たせない)")
+            throw RecError(code: .coreAudio, message: "create tap returned tap ID 0 (description を満たせない)")
         }
 
         var asbd: AudioStreamBasicDescription
@@ -142,7 +142,7 @@ final class ProbeTap {
         }
         guard let fmt = AVAudioFormat(streamDescription: &asbd) else {
             AudioHardwareDestroyProcessTap(tapID)
-            throw RecError(description: "unsupported tap format")
+            throw RecError(code: .coreAudio, message: "unsupported tap format")
         }
         format = fmt
 

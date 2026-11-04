@@ -17,15 +17,8 @@ import AVFoundation
 import CoreAudio
 import Foundation
 
-public struct RecError: Error, CustomStringConvertible {
-    public let description: String
-
-    public init(description: String) {
-        self.description = description
-    }
-}
-
 // `check` / `address` / `read` / `readIDs` / `AudioProc` / `audioProcesses()` は T2 で HAL.swift に移した。
+// `RecError` は T3 で ExitCode.swift に移した（`description` → `code` + `message`）。
 
 // MARK: - Recorder
 
@@ -54,7 +47,7 @@ public final class Recorder: @unchecked Sendable {
 
         var asbd = try read(tapID, kAudioTapPropertyFormat, AudioStreamBasicDescription())
         guard let fmt = AVAudioFormat(streamDescription: &asbd) else {
-            throw RecError(description: "unsupported tap format")
+            throw RecError(code: .coreAudio, message: "unsupported tap format")
         }
         format = fmt
 
@@ -177,7 +170,9 @@ func chromeJS(_ tabID: String, _ js: String) -> String? {
 // MARK: - modes
 
 public func recordURL(_ url: String, path: String) throws {
-    guard let tab = chromeOpen(url) else { throw RecError(description: "Chrome を開けませんでした") }
+    guard let tab = chromeOpen(url) else {
+        throw RecError(code: .chromeUnavailable, message: "Chrome を開けませんでした")
+    }
     print("Chrome で開きました。再生待ち…")
 
     // Chrome の音声プロセスが出力を始めるまで待つ
@@ -185,7 +180,9 @@ public func recordURL(_ url: String, path: String) throws {
     var targets: [AudioObjectID] = []
     let deadline = Date().addingTimeInterval(60)
     while targets.isEmpty {
-        guard Date() < deadline else { throw RecError(description: "60秒待っても音が出ませんでした") }
+        guard Date() < deadline else {
+            throw RecError(code: .pageLost, message: "60秒待っても音が出ませんでした")
+        }
         _ = chromeJS(tab, probeJS)
         Thread.sleep(forTimeInterval: 0.5)
         if try audioProcesses().contains(where: { $0.bundle.hasPrefix(prefix) && $0.running }) {

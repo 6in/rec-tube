@@ -44,13 +44,18 @@ do {
     } else if let app {
         let targets = try audioProcesses().filter { $0.bundle.hasPrefix(app) }.map(\.id)
         guard !targets.isEmpty else {
-            throw RecError(description: "'\(app)' に一致する音声プロセスがありません。再生後に --list で確認してください。")
+            throw RecError(code: .usage,
+                           message: "'\(app)' に一致する音声プロセスがありません。再生後に --list で確認してください。")
         }
         try recordLive(targets: targets, path: path)
     } else {
         try recordLive(targets: nil, path: path)
     }
+} catch let e as RecError {
+    // T3 で `RecError` が終了コードを持つようになったので、ここでそのまま使う（配線の一本化は T9）。
+    FileHandle.standardError.write(Data("error: \(e.message)\n".utf8))
+    exit(e.code.rawValue)
 } catch {
-    print("error: \(error)")
-    exit(1)
+    FileHandle.standardError.write(Data("error: \(error)\n".utf8))
+    exit(ExitCode.coreAudio.rawValue)
 }

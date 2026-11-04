@@ -1,0 +1,237 @@
+import Testing
+
+@testable import RecCore
+
+import Darwin
+import Dispatch
+import Foundation
+
+/// `Sources/RecCore/OutputPath.swift` の契約（PLAN T3 サブ作業 C の「必ず満たす断言」）を検証する。
+/// 期待値は実装ではなく契約から書いている。食い違ったら実装のバグ。
+
+// MARK: - テスト用の一時ディレクトリ
+
+/// `FileManager.default.temporaryDirectory/<UUID>` を作り、`body` の後に必ず消す。
+///
+/// 書き込み不可テストで `chmod 0500` にしても消せるよう、削除前に `0700` へ戻す。
+private func withTemporaryDirectory<T>(_ body: (URL) throws -> T) throws -> T {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer {
+        try? fm.setAttributes([.posixPermissions: NSNumber(value: 0o700)], ofItemAtPath: dir.path)
+        try? fm.removeItem(at: dir)
+    }
+    return try body(dir)
+}
+
+/// 並行テストで返り値を集める箱（収集はロックで保護する）。
+private final class URLCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var urls: [URL] = []
+    private(set) var failures: [String] = []
+
+    func record(_ url: URL) {
+        lock.lock()
+        urls.append(url)
+        lock.unlock()
+    }
+
+    func record(failure: String) {
+        lock.lock()
+        failures.append(failure)
+        lock.unlock()
+    }
+}
+
+// MARK: - sanitizeFileName
+
+/// `/` と `:` は `_` になる。
+@Test("sanitizeFileName replaces path separators with underscores")
+func sanitizeReplacesSeparators() {
+    #expect(sanitizeFileName("a/b:c") == "a_b_c")
+}
+
+/// 先頭の `.` は落ちる（隠しファイルにしない）。
+@Test("sanitizeFileName drops a leading dot")
+func sanitizeDropsLeadingDot() {
+    #expect(sanitizeFileName(".hidden") == "hidden")
+}
+
+/// 空文字列とピリオドだけの文字列は `nil`。
+@Test(
+    "sanitizeFileName returns nil when nothing usable remains",
+    arguments: ["", "..."]
+)
+func sanitizeReturnsNilForEmptyResult(input: String) {
+    #expect(sanitizeFileName(input) == nil)
+}
+
+/// 200 バイト超はマルチバイト文字を割らずに切る（🎵 ×100 = 400 バイト）。
+@Test("sanitizeFileName truncates to 200 UTF-8 bytes without splitting characters")
+func sanitizeTruncatesAtCharacterBoundary() throws {
+    let input = String(repeating: "🎵", count: 100)
+    let result = try #require(sanitizeFileName(input))
+
+    let bytes = Array(result.utf8)
+    // UTF-8 で 200 バイト以下。
+    #expect(bytes.count <= 200)
+    // バイト列を読み直しても同じ文字列（= 壊れた UTF-8 になっていない）。
+    #expect(String(decoding: bytes, as: UTF8.self) == result)
+    // 置換文字 U+FFFD が混ざっていない = 文字の途中で切っていない。
+    #expect(!result.unicodeScalars.contains("\u{FFFD}"))
+    // 🎵 は 4 バイトなので 200 / 4 = 50 文字ちょうど。
+    #expect(result.allSatisfy { $0 == "🎵" })
+    #expect(result.count == 50)
+}
+
+/// NFD の「ガ」は NFC の 1 文字（U+30AC）になる。
+@Test("sanitizeFileName normalizes NFD to NFC")
+func sanitizeNormalizesToNFC() throws {
+    let result = try #require(sanitizeFileName("\u{30AB}\u{3099}"))
+    #expect(result == "\u{30AC}")
+    #expect(Array(result.unicodeScalars) == ["\u{30AC}"])
+}
+
+/// 末尾の空白とピリオドは落ちる。
+@Test("sanitizeFileName trims trailing spaces and periods")
+func sanitizeTrimsTrailingSpacesAndPeriods() {
+    #expect(sanitizeFileName("name. ") == "name")
+}
+
+/// C0 / C1 / Zl の制御文字はすべて `_` になる。
+@Test(
+    "sanitizeFileName replaces control characters with underscores",
+    arguments: ["\u{1}", "\u{7f}", "\u{85}", "\u{2028}"]
+)
+func sanitizeReplacesControlCharacters(control: String) {
+    #expect(sanitizeFileName("a\(control)b") == "a_b")
+}
+
+// MARK: - defaultBaseName
+
+/// 固定の `Date` に対して `rec-` + 8 桁 + `-` + 6 桁の形になる。
+@Test("defaultBaseName produces rec-yyyyMMdd-HHmmss")
+func defaultBaseNameShape() {
+    let name = defaultBaseName(now: Date(timeIntervalSince1970: 1_793_000_000))
+
+    #expect(name.hasPrefix("rec-"))
+    #expect(name.count == 4 + 8 + 1 + 6)
+
+    let body = name.dropFirst(4)
+    let parts = body.split(separator: "-", omittingEmptySubsequences: false)
+    #expect(parts.count == 2)
+    #expect(parts.first?.count == 8)
+    #expect(parts.last?.count == 6)
+    #expect(body.allSatisfy { $0.isNumber || $0 == "-" })
+}
+
+// MARK: - reserveUniquePath
+
+/// 空のディレクトリでは連番なしの `name.m4a` が返り、空ファイルが残る。
+@Test("reserveUniquePath creates name.m4a in an empty directory")
+func reserveCreatesFirstName() throws {
+    try withTemporaryDirectory { dir in
+        let url = try reserveUniquePath(directory: dir, baseName: "a")
+        #expect(url.lastPathComponent == "a.m4a")
+        #expect(FileManager.default.fileExists(atPath: url.path))
+    }
+}
+
+/// `a.m4a` と `a-2.m4a` が既にあれば `a-3.m4a` が返る（PLAN 落とし穴 P5）。
+@Test("reserveUniquePath skips existing names and returns a-3.m4a")
+func reserveSkipsExistingNames() throws {
+    try withTemporaryDirectory { dir in
+        for name in ["a.m4a", "a-2.m4a"] {
+            try Data().write(to: dir.appendingPathComponent(name))
+        }
+        let url = try reserveUniquePath(directory: dir, baseName: "a")
+        #expect(url.lastPathComponent == "a-3.m4a")
+    }
+}
+
+/// `ext` が空文字列なら拡張子を付けない（`name` / `name-2`）。
+@Test("reserveUniquePath omits the extension when ext is empty")
+func reserveWithEmptyExtension() throws {
+    try withTemporaryDirectory { dir in
+        let first = try reserveUniquePath(directory: dir, baseName: "a", ext: "")
+        #expect(first.lastPathComponent == "a")
+        let second = try reserveUniquePath(directory: dir, baseName: "a", ext: "")
+        #expect(second.lastPathComponent == "a-2")
+    }
+}
+
+/// `EEXIST` 以外の errno は全部 `.outputUnavailable`（存在しないディレクトリ = `ENOENT`）。
+@Test("reserveUniquePath maps ENOENT to outputUnavailable")
+func reserveMapsENOENT() throws {
+    try withTemporaryDirectory { dir in
+        let missing = dir.appendingPathComponent("no-such-dir", isDirectory: true)
+        let error = #expect(throws: RecError.self) {
+            try reserveUniquePath(directory: missing, baseName: "a")
+        }
+        #expect(error?.code == .outputUnavailable)
+        #expect(error?.message.contains(missing.path) == true)
+    }
+}
+
+/// `EEXIST` 以外の errno は全部 `.outputUnavailable`（書き込み不可ディレクトリ = `EACCES`）。
+@Test("reserveUniquePath maps EACCES to outputUnavailable")
+func reserveMapsEACCES() throws {
+    try withTemporaryDirectory { dir in
+        let readOnly = dir.appendingPathComponent("read-only", isDirectory: true)
+        try FileManager.default.createDirectory(at: readOnly, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: NSNumber(value: 0o500)],
+                                              ofItemAtPath: readOnly.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: NSNumber(value: 0o700)],
+                                                   ofItemAtPath: readOnly.path)
+        }
+
+        let error = #expect(throws: RecError.self) {
+            try reserveUniquePath(directory: readOnly, baseName: "a")
+        }
+        #expect(error?.code == .outputUnavailable)
+        #expect(error?.message.contains(readOnly.path) == true)
+    }
+}
+
+/// 連番が 1000 まで埋まっていたら `.outputUnavailable`。
+@Test("reserveUniquePath gives up after 1000 candidates")
+func reserveGivesUpAfter1000() throws {
+    try withTemporaryDirectory { dir in
+        // `a.m4a` と `a-2.m4a` … `a-1000.m4a` を全部埋める。
+        try Data().write(to: dir.appendingPathComponent("a.m4a"))
+        for i in 2...1000 {
+            try Data().write(to: dir.appendingPathComponent("a-\(i).m4a"))
+        }
+
+        let error = #expect(throws: RecError.self) {
+            try reserveUniquePath(directory: dir, baseName: "a")
+        }
+        #expect(error?.code == .outputUnavailable)
+
+        // 1001 番目は作られていない（上限を超えて確保しない）。
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("a-1001.m4a").path))
+    }
+}
+
+/// 10 スレッドが同時に同じ baseName を要求しても、返る 10 個の URL は全部別（PLAN 落とし穴 P6）。
+@Test("reserveUniquePath hands out distinct paths to concurrent callers")
+func reserveIsAtomicUnderConcurrency() throws {
+    try withTemporaryDirectory { dir in
+        let collector = URLCollector()
+        let iterations = 10
+
+        DispatchQueue.concurrentPerform(iterations: iterations) { _ in
+            do {
+                collector.record(try reserveUniquePath(directory: dir, baseName: "a"))
+            } catch {
+                collector.record(failure: "\(error)")
+            }
+        }
+
+        #expect(collector.failures.isEmpty)
+        #expect(collector.urls.count == iterations)
+        #expect(Set(collector.urls.map(\.path)).count == iterations)
+    }
+}

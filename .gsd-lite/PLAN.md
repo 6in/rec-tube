@@ -137,7 +137,7 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
     - `rec-probe` は `swift run rec-probe …` で呼ぶ（`.build/debug/rec-probe` は allowlist の
       `Bash(.build/debug/rec:*)` に当たらない。prefix は「完全一致」か「prefix + 空白」でしか当たらないため）
 
-- [ ] T3: 終了コード・エラー型・メッセージ、ファイルライタ、出力パス（純粋ロジック + ユニットテスト）
+- [x] T3: 終了コード・エラー型・メッセージ、ファイルライタ、出力パス（純粋ロジック + ユニットテスト）
   - 完了基準:
     - `Sources/RecCore/ExitCode.swift`: `enum ExitCode: Int32`（決めた事項 #3 の表のとおり）、`enum StopReason`（#3 の理由一覧）、
       `extension StopReason { var exitCode: ExitCode }`（switch は exhaustive、default なし）、
@@ -171,6 +171,28 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
     - B: AudioFileWriter + FakeWriter + テスト（対象: `AudioFileWriter.swift`, `Fakes/FakeWriter.swift`, `AudioFileWriterTests.swift`）
     - C: OutputPath + テスト（対象: `OutputPath.swift`, `OutputPathTests.swift`）
     - 注: B と C は A の `RecError(.outputUnavailable)` を使う。親が最初に A の 3 型の骨（case 名と init）だけ作ってから分配する
+  - **T3 の実測（turn 5）**:
+    - **PLAN 訂正: `ExitCode` の signal は 1 case ではなく 3 case**（`signalHUP = 129` / `signalINT = 130` / `signalTERM = 143`）。
+      根拠: `enum ExitCode: Int32`（raw value つき）に `case signal(Int32)` のような payload 付き case は入れられない。
+      `StopReason.signal(Int32)` は残し、`exitCode` で `ExitCode(rawValue: 128 &+ sig) ?? .coreAudio` に変換する
+      （HUP / INT / TERM 以外の番号は「その他の予期しないエラー」= 8 に畳む）。
+      → **決めた事項 #3 の表は 12 行**（signal 行を 3 行に割る）。**README の「終了コード」表（T11）も 12 行で書く**
+    - **PLAN 訂正: サブ作業 A の分担**。共有型（`ExitCode` / `StopReason` / `RecError`）は**親が全部実装**し、
+      A は `Messages.swift` + `ExitCodeTests.swift`（決めた事項 #3 の表だけを渡して独立に記述）に変更した。
+      根拠: B と C が `RecError(.outputUnavailable)` に依存するため、骨だけ置くと 3 人ともビルドできない
+      （「テストを仕様表から独立に書かせる」構成は維持した。結果: 表と実装の食い違い 0 件）
+    - **PLAN 訂正: `sanitizeFileName` の制御文字判定に Unicode カテゴリ `Cf`（書式制御）を含めない**。
+      契約は「C0 / C1 制御文字（= `Cc`）と `\u{2028}`（= `Zl`）」なのでこれで満たせる。`Cf` を含めると
+      ZWJ（U+200D）が `_` になり、YouTube タイトルの連結絵文字（👨‍👩‍👧 等）が分解される
+    - **既存テストの期待値を変えた箇所（1 件）**: `Tests/RecCoreTests/SmokeTests.swift` の
+      `recErrorKeepsItsDescription` → `recErrorKeepsItsCodeAndMessage`。理由: `RecError` が
+      `description: String` から `code: ExitCode` + `message: String` に変わった（PLAN T3 の完了基準どおり）
+    - 署名の確定: `AVAudioFileWriter.init(url: URL, format: AVAudioFormat) throws`、
+      `Messages` は `public enum Messages` の `static let` 6 本
+      （`systemAudioPermission` / `chromeAutomationPermission` / `chromeJavaScriptPermission` / `noData` / `silent` / `liveStream`。
+      末尾に改行を含まないので、出力側が改行を足す）
+    - `Sources/rec/main.swift` の catch を `RecError.code` で `exit` する形に変えた（T9 の配線一本化の前倒し。最小限）。
+      `--bogus` が 1 / `--list` が 0 / `--app` 不一致が 1 は変わらず
 
 - [ ] T4: 遅延線（広告ガード）・無音メータ・録音パイプライン（純粋ロジック + ユニットテスト）
   - 完了基準:
@@ -231,6 +253,10 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
       **false**（true だと `AudioDeviceStart` が対象が音を出すまで戻らない。RESEARCH §2.1 の原文どおりの挙動）。
       `rec-probe` の `makeProbeTap` / `ProbeTap` が参考実装。ユニット: `FakeHAL` の `createIOProc` を
       ブロックさせて、`start()` が timeout で throw し、それまでに作ったものが逆順に destroy されること
+    - **PLAN 追記（T3 turn 5 の申し送り）**: `AVAudioFile.write(from:)` は、渡すバッファの `format` が
+      `AVAudioFile.processingFormat` と違うと **Objective-C 例外で即クラッシュする（Swift では catch できない）**。
+      `TapRecorder` は `start()` で確定した `format` のバッファだけを sink に渡すこと（途中で tap の format が
+      変わる経路を作らない）。T4 の `RecordingPipeline` も同じ format を `AVAudioFileWriter` に渡す
   - 対象: `Sources/RecCore/AudioHAL.swift`, `Sources/RecCore/TapRecorder.swift`, `Sources/RecCore/Legacy.swift`, `Tests/RecCoreTests/Fakes/FakeHAL.swift`, `Tests/RecCoreTests/TapRecorderTests.swift`
   - 依存: T2, T4
   - 並列サブ作業:
@@ -332,6 +358,11 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
       を 3 秒後に `kill -INT` → exit 130、`afinfo` が duration を返す、同名で再実行すると `t9-2.m4a`；`kill -TERM` → 143；`kill -HUP` → 129；
       1 秒未満で `kill -INT` → 空ファイルが残らない（P4）
     - 担う落とし穴: P1（完成）, P2, P4, P5（`-o`）, §8-2, §8-3, D14（3 モード維持）
+    - **PLAN 追記（T3 turn 5 の申し送り）**: `reserveUniquePath` は `O_EXCL` で **0 バイトのファイルを先に作って
+      予約する**。録音が 1 フレームも書けずに終わったときは、決めた事項 #7 の「`framesWritten == 0` →
+      ファイル削除 + 「データなし」（`Messages.noData`）」でこの空ファイルを必ず消すこと（上の「空ファイルが
+      残らない（P4）」は同じことを言っている）。`Messages` の各文字列は末尾に改行を含まないので、
+      stderr に出す側で改行を足す
   - 対象: `Sources/RecCore/CLI.swift`, `Sources/rec/main.swift`, `Sources/RecCore/Legacy.swift`（削除）, `Tests/RecCoreTests/CLITests.swift`, `README.md`（使い方節の下書き）
   - 依存: T8
   - 並列サブ作業:

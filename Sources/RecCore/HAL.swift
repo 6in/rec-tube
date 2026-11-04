@@ -14,7 +14,7 @@ import Foundation
 
 /// `OSStatus` を `RecError` に変える。`noErr` 以外は全部エラー。
 public func check(_ st: OSStatus, _ what: String) throws {
-    if st != noErr { throw RecError(description: "\(what) failed (OSStatus \(st))") }
+    if st != noErr { throw RecError(code: .coreAudio, message: "\(what) failed (OSStatus \(st))") }
 }
 
 /// グローバルスコープ・メイン要素のアドレス（rec が使うのはこの形だけ）。
