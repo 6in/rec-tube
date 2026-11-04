@@ -546,3 +546,4 @@
   許可の手順: システム設定 > プライバシーとセキュリティ > 画面とシステムオーディオの録音 で iTerm2 を許可 → iTerm2 再起動。
   (5) round 2 は新しいクラスの探索をしない: round 1 の格子（E19 の driver）の再確認 + F1〜F3 の差分の回帰 + 実機 6 本だけ
 - 承認待ち（ループ計測・turn 14）: 約 24 件 — Bash: .build/debug/rec（`; echo` / `${PIPESTATUS}` / `$'..'` / `>&-` 付き）×22, Bash: git ls-tree, Bash: tail
+- 承認待ち（ループ計測・turn 14）: 31 件 — Bash: bash ×2, Bash: echo, Bash: for ×2, Bash: git ×2, Bash: rec ×22, Bash: rg, Bash: tail
