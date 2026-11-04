@@ -459,3 +459,59 @@
   調整値置き場で、検証素材の寸法は道具側の値。`adtest.html` のコメントと対で保つ）。
   採用した逸脱は 1 つだけ: `verify-adtest.sh` の `mkdir -p "$SCRATCH"`（scratch が無いときの失敗を読めるようにする 1 行）
 - 承認待ち（ループ計測・turn 12）: 2 件 — Bash: bash, Bash: zsh
+
+## turn 13 — impl — T11 README 完成・実機検証スクリプト・final-check の仕上げ
+
+- やったこと: **前のターン（turn 12 の後）の作業ツリーに T11 の実装がそのまま残っていた**ので、
+  手順 0 に従って中身を確かめ（dirty なのは README.md / CLI.swift / final-check.sh の 3 本と
+  verify-*.sh 5 本の untracked = **T11 の対象ファイルと完全に一致**）、検証してから続きとして取り込んだ。
+  親がやった検証: `swift build` / `swift build -c release`（warning 0）・`swift test` **195 本 green**・
+  `scripts/final-check.sh` の `rg` 検査 **8 本すべてを素のコマンドで 1 本ずつ実行して green**
+  （rec.swift:NN 参照 0 / ExitCode の case 12 == README の表 12 行 / `--ad-guard` が CLI.swift と README の両方 /
+  許可 3 種の記述 7 行 >= 3 / `ls scripts/verify-*.sh` 6 本 == README の一覧 6 行 / Tuning 外の調整値の直書き 0 /
+  直下に rec.swift なし）・`otool -P` で `NSAudioCaptureUsageDescription` を debug / release 両方 /
+  `--list` が exit 0・`--bogus` が exit 1。親の修正は 1 箇所だけ（下記）
+- 実機検証の結果: **6 本すべて未実施**。理由は turn 11・12 と同じで**システム音声の取得の許可が
+  まだ降りていない**（3 回目の実測）。`swift run rec-probe tap system 2` が
+  `aggregate created: 102` の次で 10 秒 watchdog に当たり exit 8
+  （`tap の作成・開始が 10 秒で戻らなかった`）。verify-permission の段 1 がここで落ちるので、
+  それに依存する verify-signals / verify-adtest / verify-youtube / verify-helper-restart /
+  verify-longrun も回せない。PLAN T11 の完了基準が「許可が無ければ『未実施』と理由」を許している
+- 想定外: (1) **README の「既知の制約」に実物と食い違う記述が 1 行あった**ので直した。
+  旧: 「`-o` / `--ad-guard` の重複指定の勝敗と、**裸の位置引数の扱いも未定義**」。
+  実物（`parseArguments`、CLI.swift:100-102）は裸の位置引数を `default:` で
+  `usageError("不明な引数: …")` に落とすので**exit 1 と定まっている**。重複指定も変数への代入なので
+  3 つとも「最後が勝つ」で定まっている。README が「未定義」と書くと読者が挙動を知れないため、
+  「実装は最後が勝つ / 裸の位置引数は exit 1。ただし約束しているのはモードの重複だけ」と
+  **実物 + 約束の範囲**の形に書き換えた（`.build/debug/rec --bogus` の実出力で確認）
+  (2) **無人ターンから awk の `-f` と `-v` の一部が通らない**。`-v j='{...}'` は
+  「Brace expansion」で、`-f <file>` は「awk has an option that can't be checked before it runs」で
+  拒否される。verify-helper-restart.sh の `json_number`（jq に依存しない JSON 数値取り出し）を
+  実データで走らせられなかったので、`index`/`substr` のオフセット（`n + length(key) + 3`）を
+  手計算で検算した（`"silentSeconds":` は `length(key)+3 = 16` 文字、n はその先頭なので
+  `n+16` が値の先頭。実 verdict `{"adWindows":0,…,"silentSeconds":0,"totalSeconds":12}` で一致）。
+  verdict そのものは `swift run rec-probe analyze Tests/Fixtures/main.wav --main 440 --ad 1000` で実取得
+  (3) **`bash -n` / `zsh -n` は turn 12 と同じく権限拒否**。verify スクリプト 5 本の構文は未検査のまま
+  （`cat -t -e` でヒアドキュメント `<<-'EOS'` の字下げがタブであることだけ目視で確認済み）
+- 既存テストの期待値を変えた箇所: **なし**（テストは 1 本も触っていない。195 本は turn 12 と同数）
+- やり直し: 0 回（取り込んだ実装は検証を一発で通り、親の修正は README の 1 箇所だけ。
+  これで 7 ターン連続。なお実装自体は前のターンの成果で、このターンは検証・訂正・記録）
+- 次への注意: (1) **T11 で PLAN の全タスクが完了**。次は `/gsd-lite-verify`（phase = verify）。
+  (2) **verify が最初にやること**: `scripts/final-check.sh` は無人ターンから実行できない
+  （`Bash(scripts/:*)` の prefix ルールが `scripts/final-check.sh` に当たらない。turn 3 の PLAN 訂正）。
+  このターンと同じく**中身を素のコマンドで 1 ステップずつ回す**か、人が
+  `.claude/settings.json` の allow に `Bash(scripts/final-check.sh:*)` を足す。
+  素で回す場合は `rm -rf .build` → `swift build` → `swift build -c release` →
+  `otool -P .build/debug/rec` / `.build/release/rec` に `NSAudioCaptureUsageDescription` →
+  `swift test` → `rg` 検査 8 本 → `.build/debug/rec --list`(0) / `--bogus`(1) の順
+  (3) **VERIFICATION に手動項目として残すもの**（許可が降りていないため機械で確認できない）:
+  ① 実機検証 6 本（verify-permission → verify-signals → verify-adtest → verify-youtube →
+  verify-helper-restart → verify-longrun の順。許可の案内は各スクリプトが stderr に出す）、
+  ② 決めた事項 #2 の宿題（許可後に `rec-probe tap bundleids 3` / `hybrid` / `processes` を回し、
+  seed なしに落とせるか）、③ スリープでの `.sleep` → exit 5（`pmset sleepnow` は allowlist に入れない決定）、
+  ④ `adtest.html` は**まだ一度も Chrome で開いていない**ので probe JS との噛み合わせが未検証
+  (4) **人の操作（verify の前提）**: システム設定 > プライバシーとセキュリティ >
+  「画面とシステムオーディオの録音」で iTerm2 を許可 → **iTerm2 を再起動**。
+  あると便利な allowlist: `Bash(bash -n:*)`（verify スクリプトの構文検査）、
+  `Bash(scripts/final-check.sh:*)`（最終判定を 1 発で回す）
+- 契約外の提案: なし（このターンはサブエージェントを使っていない。前のターンの実装を検証・取り込んだだけ）
