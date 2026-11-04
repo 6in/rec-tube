@@ -547,3 +547,39 @@
   (5) round 2 は新しいクラスの探索をしない: round 1 の格子（E19 の driver）の再確認 + F1〜F3 の差分の回帰 + 実機 6 本だけ
 - 承認待ち（ループ計測・turn 14）: 約 24 件 — Bash: .build/debug/rec（`; echo` / `${PIPESTATUS}` / `$'..'` / `>&-` 付き）×22, Bash: git ls-tree, Bash: tail
 - 承認待ち（ループ計測・turn 14）: 31 件 — Bash: bash ×2, Bash: echo, Bash: for ×2, Bash: git ×2, Bash: rec ×22, Bash: rg, Bash: tail
+
+## turn 15 — impl — F1 停止理由・保存先の出力、スリープの ack 順、無音警告、policy の訂正
+
+- やったこと: 親が `Messages` の署名（`stopReason(_:probeSummary:)` 15 case / `savedTo(_:)` /
+  `autoplayRejected(name:)`、`silent` に許可の確認方法）を先に確定してビルドを通し、サブエージェント 2 本を並行に出した。
+  A（`RecordingSession` + `StopCoordinator` + 3 つのテスト + `FakeWriter`）: `finish` / `fail` の出力を
+  `emitOutcome(headline:reason:code:)` に共通化して行順を固定（停止理由/原因 → `firstWriteError` → close エラー →
+  noData / silent → liveStream → ファイルが残るときだけ最後に絶対パス）、`lastProbeSummary`（E2）、
+  `StopCoordinator.claim` + スリープの同期 `finish`（E11）、`.system` / `.app` の無音警告タイマー（E9）。
+  B（`SessionPolicy` + テスト）: `playErr` の `autoplayRejected` を警告列の先頭で 1 回だけ（E10）、
+  `pendingAdResume` で「ad を見てから main playing をまだ見ていない」に改めた（E12）。
+  親が統合して `swift test` 208 本 green（+13 本）、新しい scratch path での `swift build --build-tests` が warning 0、
+  `rg '^[^/]*\bexit\(' Sources/RecCore` 0 件を確認した
+- 想定外: (1) **PLAN の F1 と F2 で E15 の担当が食い違っていた**。E15（`fail()` の経路で 0 バイトの m4a を残さない）の
+  テストは F1 の完了基準にあるのに、`fail()` の後始末の実装は F2 の完了基準にあった。F1 でテストだけ書くと必ず落ちるので、
+  **`fail()` の後始末を F1 で先に実装**し、PLAN の F2 の該当行を打ち消し線 + 「F1 で先に実装済み。F2 ではこの項目に手を付けない」に直した
+  （PLAN 訂正: F2「`fail()` の後始末」→ F1 で実装済み。根拠: F1 の完了基準に E15 のテストがある）。
+  (2) **同じモジュールを 2 本のサブエージェントが同時に編集するとビルドが他方のエラーで落ちる**。
+  scratch path を `.build/f1a` / `.build/f1b` に分けても、SwiftPM は「入力ファイルがビルド中に変更された」で落ちる
+  （B が 1 回食らって再試行した）。依頼文に「担当外のエラーなら 10〜20 秒待って再ビルド」と書いておいたので自己解決した。
+  (3) E2（`.pageUnavailable` の probe 要約）は実装したが**テストは無い**。PLAN の F1 のテスト一覧に E2 が入っておらず、
+  再現には `Tuning.startTimeoutSeconds`（60 秒）を越える時計の早送りが要る（`now:` は注入済みなのでテスト側だけで書ける）。
+  (4) B が既存テスト 3 本の**題名とコメント**だけ直した（挙動の説明が「直前が .main」のままで事実と違っていた）。
+  `#expect` の期待値は 1 つも変えていない
+- やり直し: 0 回
+- 次への注意: (1) **期待値を変えた既存テストは 0 件**（verify はここを見る）。B が題名を直した 3 本
+  （`adToMainPlayingRewindsThenOpens` / `mainPausedThenPlayingOpensGateWithoutRewind` / `missingProbeKeepsPreviousKind`）は
+  断言の内容が同一。(2) 次は **F2**。F2 の「`fail()` の後始末」は済んでいるので飛ばす。
+  F2 の回帰は `swift .gsd-lite/logs/rec-cli-hardening/scratch/turn-014-probe.swift`（E19 の格子。先に `swift build`）。
+  (3) **F2 の `Console.writeStderr` 置き換えは `RecordingSession` の既定 `onMessage` も対象**。
+  F1 で `onMessage` に渡す行が増えた（停止理由・保存先）ので、置き換え漏れがあると stderr 閉鎖で SIGABRT が残る。
+  (4) **F3 は F1 の E10 の文言（`Messages.autoplayRejected`）を参照する**。`verify-adtest.sh` の判定を
+  「rec の stderr に自動再生拒否の行がある」に改めるとき、文言は `Messages.autoplayRejected` の実装
+  （「ブラウザが自動再生を拒否しました（<name>）」）に合わせる。(5) E11 の順序はハンドラが
+  `sessionQueue` 上で呼ばれることに依存している（`PowerWatcher(source:queue:)` に別キューを渡すと静かに崩れる）。
+  `RecordingSession.run()` にコメントは入れたが `PowerWatcher.swift` 側には印が無い
