@@ -694,3 +694,35 @@
   (3) F4 は stderr の経路を触らないので E19 の格子は回さなくてよい（2.6 分かかり Chrome のタブを 2 つ開く。回したら閉じること）。
   (4) 無人ターンのシェルで通った形: `osascript -e '…' -e '…'`（複数 `-e` で AppleScript のループ）、`timeout --preserve-status 40 swift run rec-probe …`、
   `swift <driver>.swift`、`grep -c` / `otool -P … | grep -c`。通らなかった形: `diff <(…) <(…)`（プロセス置換）
+
+## turn 19 — impl — F4 スリープ経路の ack の回帰（E20）とページ由来文字列の無害化（E21）
+
+- やったこと: E20 は PLAN の手順どおり **先に `FakePowerSource` を本物と同じ制約にして**（`unregister` 後の ack は
+  `log` に残さず `droppedAcknowledges` に数える）**E11 のテストが落ちることを確認してから**（`ack → 0`、
+  `log == [register, unregister]`）実装を直した。直したのは 2 か所: `PowerWatcher.stop()` が `WillSleep` の配送中に
+  来たら `registered` だけその場で倒し実際の `unregister` を ack の後・`queue.async` に回す／`RecordingSession.finish` が
+  `reason == .sleep` のときだけ `completion` を `sessionQueue.async` に回す。E21 は `sanitizeForTerminal(_:)` を
+  `OutputPath.swift` に足して `SessionPolicy.autoplayWarning` で通した。テストは 4 本（PowerWatcher 契約 9 /
+  SessionPolicy E21 / OutputPath 境界・置換スカラ）追加して 220 → 225 本、全部 green
+- 想定外: (1) **`completion` → `exit()` のほうが本体だった**。PLAN の (b) の括弧書き「`exit` が先なら解除は不要なので
+  『止めない』だけでもよい」は誤りで、`exit` が先なら ack も返らない（解除の有無とは別の問題）。`finish` から
+  `completion` を同期に呼ぶ限り、`PowerWatcher` 側だけ直しても実経路の ack は 0 回のまま（テストは green になるので
+  テストだけでは気づけない。`main.swift:74` を読んで分かった）。だから `.sleep` だけ `completion` を 1 つ後ろの
+  dispatch item に回した。
+  (2) **E21 の断言「`.warn` の文字列に `\n` が無い」は実装に関わらず落ちる**。`Messages.autoplayRejected` の文言自体が
+  2 行（改行 1 個）。「ページが行を増やせない」= 改行の数が文言のまま + `保存先:` で始まる行が無い、に直した。
+  (3) **JSON の文字列に生の制御文字は置けない**ので、E21 のテストは `playErr: "x\\n…\\u001b…\\u0007"` と
+  **エスケープのまま**渡してデコーダに戻してもらう形にした（`parseProbe` を通る本物の経路を残すため。
+  デコード直後に制御文字が入っていることを自己検査している）
+- やり直し: 0 回
+- 次への注意: (1) 全タスク完了。次は `/gsd-lite-verify`（**verify round 3**）。round 2 の指摘 2 件は F4 で閉じた
+  （`PLAN` の F4 に「PLAN 訂正」3 件あり。1 と 2 は E20 の直し方が PLAN の (a)/(b) どちらでもない変形である理由）。
+  (2) **E20 は実機で確かめられない**（テストは `FakePowerSource` まで）。実機のスリープ経路を見るなら
+  `scripts/verify-signals.sh` ではなく手動でスリープさせるしかなく、`pmset sleepnow` は allowlist に**入れない**決定
+  （決めた事項 #1）。VERIFICATION には「fake で ack の有効性と順序を断言、実機は未確認」と書くのが正確。
+  (3) **システム音声の取得の許可は 5 回連続で未取得**。round 3 で許可が無ければ BLOCKED にする（round 2 の決定）。
+  人の操作: システム設定 > プライバシーとセキュリティ > 画面とシステムオーディオの録音 で iTerm2 を許可 → iTerm2 を再起動。
+  (4) `swift build --build-tests --scratch-path .build/f4` を使ったので `.build/f4` が残っている（gitignore 済み。
+  消したいなら `rm -rf .build` は allowlist にある）。
+  (5) 無人ターンのシェルで通った形: `swift test --filter '<正規表現>'`、`swift build --build-tests --scratch-path …`、
+  `grep -rnE '…' <path> | grep -c .`、`cat >> <file> << 'EOF'`（ヒアドキュメント）、`date -Iseconds`
