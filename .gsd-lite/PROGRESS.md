@@ -25,3 +25,4 @@
 - 次への注意: (1) 解除後の最初のタスクは T1（SwiftPM 雛形）。`swift build` がサンドボックスで落ちたら PLAN メモの `--cache-path` 等を試す。
   (2) git は `git status` / `git add` の素の形で呼ぶ（`-C` を付けない）。(3) T2 の実機プローブは Chrome の TCC / オートメーション許可が無くても
   BLOCKED にせず「許可なし」を記録して続行する（PLAN T2）。(4) PLAN の `rec.swift:NN` は T1 以降 `git show main:rec.swift` で参照する
+- 承認待ち（ループ計測・turn 2）: 2 件 — Bash: git, Edit
