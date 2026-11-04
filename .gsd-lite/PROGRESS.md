@@ -91,3 +91,40 @@
   (5) T2 (0) の実測値: 再生中に `running` になる Chrome は **`com.google.Chrome.helper` のみ**（`com.google.Chrome` は `no` のまま）。
   `Chrome.bundleIDs` はこの 2 名に確定。許可が降りたら `swift run rec-probe tap bundleids|hybrid|processes 3` で (a)〜(e) を測り直す
 - 承認待ち（ループ計測・turn 4）: 3 件 — Bash: gsd-lite-loop.sh, Bash: rec, Bash: rec-probe
+
+## turn 5 — impl — T3 終了コード・エラー型・メッセージ・ファイルライタ・出力パス
+- やったこと: 決めた事項 #3 の表を `ExitCode`（12 case）/ `StopReason`（15 case）/ `StopReason.exitCode`（default なしの
+  switch）として実装し、`RecError` を `description` から `code` + `message` に作り替えて既存の呼び出し 7 箇所を移行。
+  3 並列サブエージェントで `Messages`（許可の案内文 3 種 + 定型文 3 種）、`AVAudioFileWriter` + `FakeWriter`、
+  `OutputPath`（`sanitizeFileName` / `defaultBaseName` / `reserveUniquePath`）とテストを実装。
+  `swift test` 32 本 green、debug / release ビルド green、`rec --bogus` が 1 / `--list` が 0 / `--app` 不一致が 1、
+  `rg 'rec\.swift:[0-9]'` が 0 件
+- 想定外: (1) **`enum ExitCode: Int32` に `case signal(Int32)` を入れられない**（raw value つき enum は payload を
+  持てない）。→ **PLAN 訂正: signal を `signalHUP = 129` / `signalINT = 130` / `signalTERM = 143` の 3 case に割り、
+  `StopReason.signal(Int32)` 側は残して `ExitCode(rawValue: 128 &+ sig) ?? .coreAudio` で変換する**。
+  決めた事項 #3 の表と README の終了コード表（T11）は **12 行**になる。
+  (2) **サブ作業 A の「骨だけ親が作る」が成立しない**。B と C が `RecError(.outputUnavailable)` に依存するので、
+  `exitCode` の switch を空にしたままでは 3 人ともビルドできない。→ **PLAN 訂正: 共有型（`ExitCode` /
+  `StopReason` / `RecError`）は親が完成させ、A は `Messages.swift` + `ExitCodeTests.swift` に変更**。
+  「テストを仕様表から独立に書かせる」構成（A に表だけ渡して実装を見せない）は維持し、結果として
+  表と実装の食い違いは 0 件だった
+  (3) **`sanitizeFileName` の制御文字判定に Unicode カテゴリ `Cf` を入れると ZWJ（U+200D）が `_` になる**
+  （連結絵文字 👨‍👩‍👧 が分解される）。契約は「C0 / C1（= `Cc`）と `\u{2028}`（= `Zl`）」なので `Cf` を外しても
+  指定の 4 文字（`\u{1}` `\u{7f}` `\u{85}` `\u{2028}`）は全部 `_` になる。→ **PLAN 訂正**して外した
+  (4) サブエージェントの同時ビルドは `swift build --scratch-path .build/t3a|t3b|t3c` で分けたので
+  `.build` のロック待ちも担当外ファイルの巻き込みも起きなかった（3 人とも「担当外のビルドエラーなし」）
+- 既存テストの期待値を変えた箇所（1 件）: `Tests/RecCoreTests/SmokeTests.swift` の
+  `recErrorKeepsItsDescription` → `recErrorKeepsItsCodeAndMessage`。理由: `RecError` の形が
+  `description: String` → `code: ExitCode` + `message: String` に変わった（T3 の完了基準どおり）
+- やり直し: 0 回
+- 次への注意: (1) 次は **T4**（`Tuning` / `DelayLine` / 無音メータ / `RecordingPipeline`）。純粋ロジックなので
+  実機の許可に依存しない。`Tuning` を作ったら**他ファイルの数値直書きを禁止**（追従先チェックリスト）。
+  (2) **`AVAudioFile.write(from:)` はバッファの `format` が `processingFormat` と違うと ObjC 例外で即クラッシュする**
+  （Swift では catch 不能）。T4 のパイプラインと T5 の `TapRecorder` は `start()` で確定した 1 つの format の
+  バッファだけを流すこと（PLAN T5 に追記済み）。
+  (3) `reserveUniquePath` は `O_EXCL` で **0 バイトのファイルを先に作る**。`framesWritten == 0` のときに
+  決めた事項 #7 どおり削除しないと空ファイルが残る（PLAN T9 に追記済み）。
+  (4) `Messages` の各文字列は**末尾に改行を含まない**（出力側が足す）。
+  (5) 並列サブ作業は `swift build/test --scratch-path .build/<サブ作業名>` を使わせると衝突しない（T4 以降も同じ形で）。
+  (6) 実機の許可（システム設定 > プライバシーとセキュリティ > システム音声の録音で iTerm2 を許可 → iTerm2 再起動）は
+  まだ必要。T10 / T11 の verify-* に入る前に人の操作が要る
