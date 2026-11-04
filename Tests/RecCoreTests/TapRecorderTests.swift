@@ -451,9 +451,11 @@ struct TapRecorderTests {
         let description = try #require(hal.lastAggregateDescription, "createAggregate が呼ばれていません")
 
         // true だと `AudioDeviceStart` が「対象が音を出すまで」戻らない（RESEARCH §2.1）。
-        let autoStart = try #require(boolValue(description[kAudioAggregateDeviceTapAutoStartKey]),
-                                     "TapAutoStart が辞書にありません: \(description.keys.sorted())")
-        #expect(autoStart == false, "kAudioAggregateDeviceTapAutoStartKey は false のはず")
+        // `Bool?` を `#require` に渡すと「条件として見るのか unwrap するのか」で曖昧になり警告が出るので、
+        // `== false` の比較 1 本で「辞書にある（nil でない）」と「false である」を同時に見る。
+        let autoStart = boolValue(description[kAudioAggregateDeviceTapAutoStartKey])
+        #expect(autoStart == false,
+                "kAudioAggregateDeviceTapAutoStartKey は false のはず（辞書のキー: \(description.keys.sorted())）")
 
         // 主サブデバイスは既定出力デバイスの UID。
         #expect(description[kAudioAggregateDeviceMainSubDeviceKey] as? String == hal.deviceUIDValue,
