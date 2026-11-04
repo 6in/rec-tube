@@ -50,3 +50,43 @@
   なお rec 自身が `dev.rec-tube.rec` として列挙されており、Info.plist が実行時にも効いていることが分かる。
   (3) PLAN / RESEARCH の `rec.swift:NN` は `git show main:rec.swift` で引く（final-check.sh が Sources/README への混入を弾く）
 - 承認待ち（ループ計測・turn 3）: 6 件 — Bash: bash ×2, Bash: build.sh ×2, Bash: gsd-lite-loop.sh, Bash: rec
+
+## turn 4 — impl — T2 HAL 層・`TapTarget`・`rec-probe` と bundleIDs の実機プローブ
+- やったこと: `Sources/RecCore/HAL.swift` に HAL のプロパティ読み出し（`check` / `address` / `read` / `readIDs`）・
+  `audioProcesses()` / `defaultOutputDevice()` / `deviceUID()`・`Chrome` の既定値・`TapTarget` 3 variant と
+  `makeTapDescription` を置き（Legacy.swift から削除）、`rec-probe` の `list` / `tap` / `analyze`(usage) を実装、
+  `TapTargetTests` 8 本を追加。実機プローブを回して **(0) は実測確定、(a)〜(e) は許可が無く未実測**（下記）。
+  機械検証は全部 green（debug / release ビルド、`swift test` 8 本、`otool -P .build/release/rec-probe` に
+  `NSAudioCaptureUsageDescription`、`rec --list` が 0 / `rec --bogus` が 1、`rg 'rec\.swift:[0-9]'` が 0 件）
+- 想定外: (1) **`AudioDeviceCreateIOProcIDWithBlock` が無期限にブロックし、許可ダイアログも出ない**。
+  tap（ID 101）と aggregate（ID 102）の作成と `kAudioTapPropertyFormat`（48000Hz/2ch）までは成功する。
+  `system` / `hybrid` の両 variant、`kAudioAggregateDeviceTapAutoStartKey` を false にしても、Bash の
+  サンドボックスを外しても同じ。System Events でフォアグラウンドプロセスと全ウィンドウを見ても許可ダイアログは無く、
+  tccd / UserNotificationCenter に新規プロセスも無い → **システム音声の取得の許可が責任プロセス（iTerm2）に降りていない**
+  （RESEARCH §2.5）。PLAN T2 の指示どおり BLOCKED にせず、決めた事項 #2 は hybrid のまま続行した。
+  **PLAN 追記: T5 の `start()` は `Tuning.tapStartTimeoutSeconds = 10` の watchdog で必ず有限時間で戻す**
+  （根拠: この実測。現行 rec.swift は許可が無いと永久に固まる）。`TapAutoStart` も **false** に固定
+  （根拠: RESEARCH §2.1「非ゼロなら AudioDeviceStart が対象が音を受け取り始めるまで待つ」= 無音なら戻らない）。
+  **PLAN 追記: `verify-permission.sh` は「全ゼロ」より先に「開始できるか」を見る**（許可なしの実際の症状が無音でなく固まりだったため）
+  (2) **`.build/debug/rec-probe` が無人ターンから実行できない**。allowlist の `Bash(.build/debug/rec:*)` は
+  prefix ルール（完全一致 or prefix + 空白）で `rec` には当たるが `rec-probe` には当たらない。
+  → **PLAN 訂正: `rec-probe` は `swift run rec-probe …` で呼ぶ**（`Bash(swift:*)` に当たる。turn 3 の
+  `scripts/*.sh` と同じ理屈）。`swift run` で録音系を直に待つと固まるので watchdog か `run_in_background` が必須
+  (3) `CATapDescription.processes` は `[NSNumber]` ではなく **`[AudioObjectID]`**（`\.uint32Value` が無くテストが 1 回落ちた）
+  (4) PLAN T1 は `rec` にしか Info.plist を指定していなかったが、**`rec-probe` にも埋め込みが必要**
+  （無いと「全ゼロ」と「許可なし」を区別できず、プローブの意味が無くなる）。bundle ID は `dev.rec-tube.rec-probe` で分けた
+  (5) turn 3 に残っていた `read<T>` の警告は `withUnsafeMutablePointer` で消えた（HAL.swift に移すついでに解消）
+- やり直し: 2 回（1: `desc.processes.map(\.uint32Value)` でテストがコンパイルエラー → `desc.processes` を直接比較。
+  2: `hybrid` の初回プローブが 120 秒のツール timeout まで固まった → 原因をステップ目印（stderr）で
+  `AudioDeviceCreateIOProcIDWithBlock` と特定し、`ProbeTap` に 10 秒 watchdog と `--autostart` を入れて作り直した）
+- 次への注意: (1) **`swift run rec-probe …` を使う**（`.build/debug/rec-probe` は承認待ちになる）。
+  `.build/debug/rec` は allowlist に当たるのでそのまま使える。
+  (2) **録音を開始するコマンドを無人ターンから直に待たない**（許可が降りるまで必ず固まる）。
+  10 秒 watchdog を通すか `run_in_background` にして、固まったら TaskStop する。
+  (3) **T5 は `start()` の watchdog（`Tuning.tapStartTimeoutSeconds = 10`）と `TapAutoStart = false` を必ず入れる**（PLAN T5 に追記済み）。
+  `FakeHAL` の `createIOProc` をブロックさせる形のテストも PLAN に追記した。
+  (4) 次は T3（純粋ロジック: ExitCode / エラー / ファイルライタ / 出力パス）。実機の許可に依存しないので普通に進められる。
+  T10 / T11 の実機検証に入る前に、**ユーザーがシステム設定 > プライバシーとセキュリティ > システム音声の録音で
+  iTerm2 を許可して iTerm2 を再起動する**必要がある（PLAN メモの「verify 前に必要な人の操作」）。
+  (5) T2 (0) の実測値: 再生中に `running` になる Chrome は **`com.google.Chrome.helper` のみ**（`com.google.Chrome` は `no` のまま）。
+  `Chrome.bundleIDs` はこの 2 名に確定。許可が降りたら `swift run rec-probe tap bundleids|hybrid|processes 3` で (a)〜(e) を測り直す
