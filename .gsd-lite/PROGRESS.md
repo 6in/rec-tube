@@ -26,3 +26,26 @@
   (2) git は `git status` / `git add` の素の形で呼ぶ（`-C` を付けない）。(3) T2 の実機プローブは Chrome の TCC / オートメーション許可が無くても
   BLOCKED にせず「許可なし」を記録して続行する（PLAN T2）。(4) PLAN の `rec.swift:NN` は T1 以降 `git show main:rec.swift` で参照する
 - 承認待ち（ループ計測・turn 2）: 2 件 — Bash: git, Edit
+
+## turn 3 — impl — T1 SwiftPM 雛形・Info.plist 埋め込み・ビルド/テストスクリプト
+- やったこと: `git mv rec.swift Sources/RecCore/Legacy.swift` でパッケージ化し、`Package.swift`（RecCore / rec / rec-probe / RecCoreTests、
+  Swift 6 言語モード）、`Sources/rec/main.swift`、`Sources/rec/Info.plist`（-sectcreate 埋め込み）、`scripts/{build,test,final-check}.sh`、
+  `.gitignore`、README 骨組み、Swift Testing の @Test 1 本を作成。T1 の機械検証は全部 green（debug/release ビルド、両バイナリの
+  `NSAudioCaptureUsageDescription`、`swift test`、`--list` が 0 / `--bogus` が 1、`rg 'rec\.swift:[0-9]'` が 0 件）
+- 想定外: (1) **無人ターンから `scripts/*.sh` が実行できない**。allowlist の prefix ルールは「完全一致」か「prefix + 空白」でしか
+  当たらないため `Bash(scripts/:*)` は `scripts/build.sh` に当たらず、`Bash(bash scripts/:*)` も同様、`bash` 単体は allowlist に無い。
+  → **PLAN 訂正: 無人ターンの検証コマンド `scripts/build.sh` / `scripts/test.sh` → `swift build` / `swift test`（素のコマンド。
+  `DEVELOPER_DIR` は settings.json の env で設定済み。scripts は人間・README 向けに残す）**。`final-check.sh` の中身は
+  1 ステップずつ素のコマンドで回して green を確認した。(2) `platforms: [.macOS(.v26)]` は PackageDescription 6.2 以降専用で
+  tools-version 6.0 では manifest ごと失敗 → PLAN T1 の代替案どおり `.macOS("26.0")` にした（Swift は 6.2.1 / Xcode 26.1 SDK）。
+  (3) Swift 6 言語モードで引っかかったのは 2 箇所だけ（`sigSource` の可変グローバル → `nonisolated(unsafe)`、`Recorder` →
+  `@unchecked Sendable`）。IOProc ブロックが非 Sendable な `AVAudioFormat` をキャプチャする形だったので `self.format` 参照に変えた。
+  `AudioObjectGetPropertyData` のジェネリック `read<T>` に警告 1 件が残る（Legacy なので T2/T5 で消える）
+- やり直し: 1 回（`.macOS(.v26)` で manifest が壊れ、`.macOS("26.0")` に直した）
+- 次への注意: (1) **検証は `swift build` / `swift test` を直に呼ぶ**（`scripts/...` は承認待ちで無進捗になる）。scripts を無人で
+  回したいならユーザーが `Bash(scripts/build.sh:*)` のように**完全なファイル名で** allow に足す必要がある（verify が
+  `final-check.sh` / `verify-*.sh` を回す前に要るので、T11 までに判断してもらう）。
+  (2) T2 向けの実測: `.build/debug/rec --list` に出た Chrome 系は `com.google.Chrome` と `com.google.Chrome.helper` の 2 つだけ
+  （`.helper.renderer` / `.helper.gpu` 等は出ない）。決めた事項 #2 の `chromeBundleIDs` はここを起点に絞る。
+  なお rec 自身が `dev.rec-tube.rec` として列挙されており、Info.plist が実行時にも効いていることが分かる。
+  (3) PLAN / RESEARCH の `rec.swift:NN` は `git show main:rec.swift` で引く（final-check.sh が Sources/README への混入を弾く）
