@@ -727,3 +727,27 @@
   (5) 無人ターンのシェルで通った形: `swift test --filter '<正規表現>'`、`swift build --build-tests --scratch-path …`、
   `grep -rnE '…' <path> | grep -c .`、`cat >> <file> << 'EOF'`（ヒアドキュメント）、`date -Iseconds`
 - 承認待ち（ループ計測・turn 19）: 1 件 — Bash: gsd-lite-loop.sh
+
+## turn 20 — verify — round 3: F4 合格（指摘 0 件）、実機は許可なしで未実施（6 回目）→ BLOCKED（verify_round は 2 のまま、マージなし）
+
+- やったこと: `final-check.sh` 相当を素のコマンドで全段回して green（クリーンビルド 2 種 warning 0 / plist 埋め込み / `swift test` 225 本・
+  14 suite・warning 0 / 追従チェックの grep / CLI の exit）。F4 の差分（8 ファイル）を親がソースで読み、読み取り専用サブエージェント 1 本に
+  独立レビューさせて一致（E20 の実経路は close → ack → exit、E21 の出口は 1 か所、他のページ由来文字列の出口なし、コードの欠陥 0）。
+  許可は `timeout --preserve-status 40 swift run rec-probe tap system 2` で確認 → exit 8（未許可）。round 2 の決定どおり BLOCKED にし、
+  `VERIFICATION.md` に round 3（受け入れ基準の達成状況の表つき）、`BLOCKED.md` に人の操作と選択肢 A / B / C を書いた
+- 想定外: (1) **`./gsd-lite-loop.sh --where` が承認待ちになった**（allowlist は `Bash(gsd-lite-loop.sh --where:*)` で `./` 付きに当たらない。
+  turn 19 の「承認待ち 1 件 — gsd-lite-loop.sh」と同じ）。`ls .gsd-lite` で in-repo 形と読んで続行した。
+  (2) サブエージェントが 1 件、**E20 の `completion` 非同期化はテストで断言されていない**ことを見つけた（`completion` を同期に戻しても
+  E11 は green のまま、最悪 flaky）。コードの欠陥ではなく検出力の欠けなので差し戻さず VERIFICATION §5 の残留リスクと BLOCKED の選択肢 C にした
+  （F4 を verify_round 3 で差し戻すと上限に達し、実機の調整タスクを出す余地が無くなる）。
+  (3) `bash -n` と E19 の格子は回していない（F4 が scripts / stderr の出口を触っていないため。VERIFICATION §1 に明記）
+- やり直し: 0 回
+- 次への注意: (1) 人の操作待ち。**システム設定 > プライバシーとセキュリティ > 画面とシステムオーディオの録音 で iTerm2 を許可 → iTerm2 再起動**
+  （BLOCKED.md の A）。解除後の verify は F4 を再検証せず、実機 6 本と決めた事項 #2 の宿題だけを行う。
+  (2) 無人ターンから `scripts/verify-*.sh` を回すには allowlist に**完全なファイル名**が要る（BLOCKED.md A-4 に 7 本の一覧）。無ければ
+  各スクリプトの中身を allow 済みコマンドで 1 段ずつ再現する。
+  (3) 合格時はリモート無し（`git remote -v` が空）なので `git checkout main` → `git merge --no-ff gsd-lite/rec-cli-hardening` → `phase: "reflect"`。
+  (4) 広告境界が許容を外れたら F5（`--ad-guard` / `Tuning.adResumeRewindSeconds` の調整）で差し戻せるのは verify_round 3 の 1 回だけ（上限 3）。
+  (5) 無人ターンのシェルで通った形: `timeout --preserve-status 40 swift run rec-probe …`（foreground、tool timeout 90 秒）、`swift test --filter 'a|b|c'`、
+  `otool -P <bin> | grep -c …`、`grep -rnE … --exclude=… --exclude-dir=…`、`git show <sha>:<path>`。通らなかった形: `./gsd-lite-loop.sh --where`、
+  `grep --include=*.swift`（zsh のグロブ展開で落ちる。`--include` を付けずに Sources を指定する）

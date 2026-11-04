@@ -1,5 +1,85 @@
 # VERIFICATION — rec-cli-hardening
 
+## round 3（turn 20 / 2026-11-05）— 判定: **F4 合格・マイルストーンは BLOCKED**（実機の許可が 6 回目も未取得。verify_round は 2 のまま）
+
+対象: round 2 の差し戻し F4 の修正差分 `git diff ccdf51b...HEAD -- Sources Tests`（8 ファイル、+357 / -27。scripts / README / Package.swift に変更なし）と、
+マイルストーン全体 `git diff main...HEAD`（73 ファイル、+15083 / -8）の最終判定。round 1 / 2 の方針どおり**新しいクラスの探索はせず**、
+F4 の差分の回帰確認と機械検証の再実行だけを行った。並列レビュー: F4 の差分に読み取り専用のサブエージェント 1 本（コード + セキュリティ）を当て、
+親が機械検証・実機の到達範囲・報告の裏取り（ソースを読んで確認）を行った。
+
+### 1. 機械検証（`scripts/final-check.sh` 相当。すべて green）
+
+| 段 | 結果 |
+|---|---|
+| `rm -rf .build` → `swift build` / `swift build -c release` | 成功、warning 0（両ログで `warning` 0 件） |
+| `otool -s __TEXT __info_plist` / `otool -P` に `NSAudioCaptureUsageDescription`（debug / release） | 両方あり |
+| `swift test`（クリーンからなのでテストビルドの warning も含む） | **225 本 / 14 suite すべて green、warning 0**（round 2 の 220 + F4 の 5: PowerWatcher 契約 9 が 1、SessionPolicy E21 が 1、OutputPath の `sanitizeForTerminal` が 3） |
+| F4 の 4 本 + E11 を名前で単独実行 | 6 本 green（E11 は `close(ack=0)` → ack 1 回を fake の新しい制約の下で通過） |
+| 追従チェック（final-check の追従節を grep で 1 段ずつ） | ExitCode 12 / README 12、`--ad-guard` 両方あり、許可 7 行、verify スクリプト 6 / 6、調整値リテラルの外部 0 件、`standardError.write` 0、`Legacy` 0、`rec.swift:NN` / `main:rec.swift` / ローカルパス 0、直下の `rec.swift` 無し |
+| `rg '^[^/]*\bexit\(' Sources/RecCore` | 0 件 |
+| `.build/debug/rec --list` / `--bogus` | exit 0 / exit 1 + 個別の説明 + usage |
+| `bash -n scripts/*.sh` | **再実行していない**（F4 は scripts を 1 行も触っていない。round 2 で 9 本 exit 0） |
+| E19 の格子 | **再実行していない**（F4 は stderr の出口（`Console.writeStderr`）と argv を触っていない。round 2 の指示どおり） |
+
+### 2. F4 の回帰確認（E20 / E21。ソースを読んで確認。サブエージェントの報告と一致）
+
+- **E20**: 実経路の順序は `writer.close()` → `IOAllowPowerChange` → `exit()`。IOKit コールバック（セッションキュー上）→ `PowerWatcher.receive` が
+  `deliveringWillSleep` を立てる → `handler(.sleep)` → `finish(.sleep)` → `teardown()` → `PowerWatcher.stop()` は `registered` だけ倒して `.afterAcknowledge`
+  （`rootPort` は無傷）→ `emitOutcome`（close）→ `completion` を `sessionQueue.async` に積む → handler が戻る → `defer` の `acknowledge` が `rootPort != 0` で
+  有効に届く → `unregister` を `queue.async` に積む → 直列キューの次の item は先に積んだ `completion` → `exit`。`unregister` は走らずにプロセスが終わる（無害）。
+  ack を捨てる経路・2 回 ack する経路・port のコールバック内で `IODeregisterForSystemPower` / `IONotificationPortDestroy` を呼ぶ経路は無い。
+  `stop()` を別スレッドから同時に呼んでも、ロックの下で旗を見るので「両方が解除を飛ばす」窓は無い。新しい `sync` のホップは無い（自己デッドロックなし）
+- **E20 のテスト**: `FakePowerSource.acknowledge` が `unregister` 後の ack を `droppedAcknowledges` に落とす形は本物の `guard connect != 0` と同じ条件
+  （本物の `unregister` は `rootPort` と `handler` を同時に消す）。`PowerWatcher.stop()` の遅延を戻せば E11（ack 1 回）と新しい契約 9 の 1 本
+  （log の順序 `[register, ack, unregister]`、dropped 0、2 回目の `stop()` で `unregister` が増えない）の両方が落ちる。turn 19 が「fake を先に直して E11 が落ちるのを確認してから実装を直した」手順は PROGRESS に記録あり
+- **E21**: `sanitizeForTerminal` は `Cc` / `Cf` / `Zl` / `Zp` → `_`、`Character` 境界で UTF-8 64 バイト切り、nil なし。呼び出しは `SessionPolicy.autoplayWarning` の 1 か所で、
+  `Messages.autoplayRejected` の他の呼び出し元は無い。ページが決められる他の文字列の出口: `kind` / `state` は enum（`lastProbeSummary` は `state.rawValue`）、
+  `id` は比較のみで出力しない、`title` は `sanitizeFileName`（`Cc` / `Zl` / `Zp` を落とす）経由でパスにしか出ない、`ChromeController.title(tab:)` は Sources に呼び出し元なし、
+  `controlFailure` に埋まる osascript の stderr はページの影響を受けないスクリプト（`get version` / ウィンドウ作成）のもの。新しい出口は無い
+- **テストの妥当性**: 新しい 4 本は実際の契約を断言している（ack の回数と順序、dropped 0、冪等、改行の数が文言のまま、`保存先:` の行が無い、ESC / BEL / CR が 0、
+  61 バイト + `ア\u{301}` の素材でスカラ単位の切り方なら落ちる）。`SessionPolicyTests` の入力は JSON エスケープのまま渡してデコーダに戻させ、デコード直後に制御文字があることを自己検査している
+- **既存テストの期待値の変更は 0 件**（F4 は既存の `#expect` を 1 行も変えていない。PROGRESS turn 19 の記述と `git diff` が一致）
+- **文書の主張**: PROGRESS turn 19 の「220 → 225 本」は実測と一致。PLAN F4 の「PLAN 訂正」3 件はコードと一致（(b) の変形で 2 か所、`completion` の非同期化、E21 の断言の形）
+
+### 3. 実機（受け入れ基準「verify がループ内で実機録音を行う」）
+
+- **システム音声の取得の許可は依然として降りていない**（このターンで **6 回目**の実測）。`timeout --preserve-status 40 swift run rec-probe tap system 2` が
+  `aggregate created: 102` の次（`AudioDeviceCreateIOProcIDWithBlock`）で 10 秒の watchdog に当たり **exit 8**。round 1 / 2 と同じ症状
+- → **ローカル検証ページの広告境界と YouTube の完走は未実施**。verify スクリプト 6 本も回していない（`verify-permission.sh` の段 1 で落ちる）
+- round 2 で決めたとおり、**round 3 で許可が無ければ BLOCKED**。コードに差し戻す指摘は無いので `verify_round` は 2 のまま、`BLOCKED.md` に人の操作と再開手順を書いた。
+  受け入れ基準のうち満たせていないのは実機 2 項目だけで、他はすべて満たしている（§4）
+
+### 4. 受け入れ基準の達成状況（REQUIREMENTS.md）
+
+| 基準 | 状況 |
+|---|---|
+| 既存 3 モードと `--url` がビルド・起動できる | 達成（ビルド green、`--list` / `--bogus` / `--url` の argv 経路は round 1 の格子で実測。録音の開始は許可待ち） |
+| `rec.swift` を `Sources/` へ、ビルド手順は README | 達成 |
+| README に事前設定（Xcode / DEVELOPER_DIR、JS 許可、オートメーション、システム音声の許可先、症状と確認方法） | 達成（許可 3 種 7 行、「既知の制約」あり） |
+| ライブ配信 / URL 不正 / タブ閉鎖 / JS 許可なしで原因の分かる非ゼロ終了 | 達成（URL 不正は格子で実測、他 3 つはユニット + F1 の E1〜E4。タブ閉鎖と JS 許可なしの実機は未実施） |
+| SIGINT / SIGTERM / 途中エラーで m4a が再生できる | ユニット（E11 / E15 / RecordingSession）と `verify-signals.sh` のうち、**実機は未実施**（許可待ち） |
+| 堅牢性: トレースバックなし・データを失わない（D9） | 達成（round 1 の格子 + F2 + E19 の回帰。トレースバック 0） |
+| `swift test` が成功 | 達成（225 本） |
+| verify がループ内で実機録音（ローカルページの広告境界 / YouTube 完走） | **未達成 → BLOCKED**（人の操作が必要。6 回連続で許可なし） |
+
+### 5. 残留リスク（差し戻さない。round 1 §6 / round 2 §6 に追加）
+
+- **E20 の `completion` の非同期化（`RecordingSession.swift` の `finish` の 5）はテストで断言されていない**。E11 は `close(ack=0)` と ack 1 回を見るだけで、
+  `completion` を同期に戻しても `waitUntil { completionCount == 1 }` の後で ack が数マイクロ秒遅れて 1 になるため green のまま（最悪で flaky）。
+  実経路の「ack → exit」を守っているのはこの 1 行なので、手直しするなら E11 の `completion` クロージャで `completion(ack=\(acks))` を順序ログに積み、
+  `["close(ack=0)", "completion(ack=1)"]` を断言する（サブエージェントの指摘。コードの欠陥ではなく検出力の欠け）
+- E20 の実機確認（本当に `IOAllowPowerChange` が返ってスリープが遅れないか）は fake までで、`pmset sleepnow` は allowlist に入れない決定（決めた事項 #1）
+- `PowerWatcher` を `rec` 以外から使う場合、遅延した `unregister` は port の配送キュー上（コールバックの外）で走る。`rec` では `exit` が先なので走らない
+- `sanitizeForTerminal` の空文字列は「（）」の表示になる（probe が `PlayError` を入れる契約なので実際には来ない）
+- `./gsd-lite-loop.sh --where` は allowlist の `Bash(gsd-lite-loop.sh --where:*)` に当たらない（`./` 付き）。無人ターンでは `--where` を使わず in-repo 形として読んだ
+
+### 6. 手動確認として残すもの（round 1 §7 / round 2 §7 と同じ。許可が降りた後）
+
+1. 実機検証 6 本（verify-permission → signals → adtest → youtube → helper-restart → longrun）
+2. 決めた事項 #2 の宿題（seed なし bundleIDs で音が入るか）
+3. スリープ → exit 5 と m4a の再生可否（E20 の実機側）
+4. 出力デバイスの切り替え → exit 5
+
 ## round 2（turn 18 / 2026-11-04）— 判定: **差し戻し**（F4 を PLAN に追記。verify_round 1 → 2）。実機は許可なしで未実施（5 回目）
 
 対象: round 1 の差し戻し F1〜F3 の修正差分 `git diff 6d162e2...HEAD`（Sources / Tests / scripts / README、34 ファイル、+1790 / -164）と、
