@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<!-- adtest.html — 広告の割り込みを file:// だけで再現するローカル素材（PLAN「決めた事項」#12）。
+     素材は `swift run rec-probe tones Tests/Fixtures` が同じディレクトリに書く
+     main.wav（440 Hz・12 秒）と ad.wav（1 kHz・4 秒）。相対パスでしか参照しない。
+     進行: 本編 0→4 秒 → 広告 4 秒（#movie_player.ad-showing） → 本編 4→12 秒 → ended。
+     期待する結果: 本編合計 12 秒、広告混入 0 窓、欠落・重複 < 1 秒。
+     注意: window.ytInitialPlayerResponse は置かない（probe JS の document.title
+     フォールバック経路を通すため）。location.search（?v=local1）は JS 側で一切触らない。 -->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Local Ad Test</title>
+<style>
+html, body { margin: 0; background: #111; color: #eee; font-family: sans-serif; }
+#movie_player { position: relative; width: 100%; height: 60vh; background: #000; }
+#movie_player.ad-showing { outline: 4px solid #fc0; }
+#v { width: 100%; height: 100%; }
+#start { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+         font-size: 24px; padding: 16px 32px; display: none; }
+#log { padding: 8px 12px; font-size: 14px; white-space: pre-line; }
+</style>
+</head>
+<body>
+<div id="movie_player"><video id="v" src="main.wav" autoplay playsinline></video></div>
+<button id="start" type="button">クリックで開始</button>
+<div id="log"></div>
+<script>
+document.title = 'Local Ad Test';
+
+var v = document.getElementById('v');
+var player = document.getElementById('movie_player');
+var startButton = document.getElementById('start');
+var logBox = document.getElementById('log');
+
+// 本編の切り替え位置（秒）と広告の尺（秒）。main.wav / ad.wav の中身と対になる。
+var AD_AT = 4;
+
+// 'main1'（0→4 秒） → 'ad'（4 秒） → 'main2'（4→12 秒） → 'done'。
+var phase = 'main1';
+// 広告へ入ったかどうか。二重発火を防ぐ一方向のフラグ（戻さない）。
+var adTriggered = false;
+// src 差し替え後に 1 回だけ使うシーク位置（loadedmetadata で適用する）。
+var seekTo = null;
+
+function log(message) {
+  logBox.textContent += message + '\n';
+}
+
+function tryPlay() {
+  var p = v.play();
+  if (p && typeof p.catch === 'function') {
+    p.catch(function (e) {
+      startButton.style.display = 'block';
+      log('play() が拒否された: ' + ((e && e.name) ? e.name : 'PlayError'));
+    });
+  }
+}
+
+// src を差し替えて指定位置から再生する。currentTime は loadedmetadata の後でないと
+// 新しいメディアに効かないので、適用はイベント側に任せる。
+function switchTo(src, at) {
+  seekTo = at;
+  v.src = src;
+  v.load();
+}
+
+v.addEventListener('loadedmetadata', function () {
+  if (seekTo !== null) {
+    v.currentTime = seekTo;
+    seekTo = null;
+  }
+  tryPlay();
+});
+
+// 本編 → 広告。timeupdate は間隔が粗く取りこぼすので currentTime を自前で監視する。
+setInterval(function () {
+  if (phase !== 'main1' || adTriggered) { return; }
+  if (v.currentTime >= AD_AT) {
+    adTriggered = true;
+    phase = 'ad';
+    player.classList.add('ad-showing');
+    log('広告へ（本編 ' + v.currentTime.toFixed(2) + ' 秒）');
+    switchTo('ad.wav', 0);
+  }
+}, 50);
+
+v.addEventListener('ended', function () {
+  if (phase === 'ad') {
+    // 広告明け。ad-showing を外して本編を 4 秒の位置から再開する。
+    phase = 'main2';
+    player.classList.remove('ad-showing');
+    log('広告おわり → 本編を ' + AD_AT + ' 秒から再開');
+    switchTo('main.wav', AD_AT);
+    return;
+  }
+  if (phase === 'main2') {
+    // 本編の残り（8 秒）を再生し終えた = video は ended のまま。合計 12 秒。
+    phase = 'done';
+    log('本編おわり（合計 12 秒ぶん）。ended=' + v.ended);
+  }
+});
+
+startButton.addEventListener('click', function () {
+  startButton.style.display = 'none';
+  tryPlay();
+});
+
+tryPlay();
+</script>
+</body>
+</html>

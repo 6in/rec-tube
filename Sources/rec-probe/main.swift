@@ -20,8 +20,22 @@
 //       終了コード: 0 = 一度でも非ゼロのサンプルが来た / 4 = 全編ゼロ（許可なしか対象が無音）/
 //                   8 = tap・aggregate・IOProc の作成失敗・時間切れ / 1 = 引数不正
 //
-//   rec-probe analyze <wav|m4a> [--main 440 --ad 1000 --expect-main 秒] [--silence]
-//       録音結果のトーン判定（Goertzel）。中身は T10 が書く。
+//   rec-probe tones <dir>
+//       `<dir>` に `main.wav`（440 Hz・12 秒）と `ad.wav`（1 kHz・4 秒）を書く。
+//       `Tests/Fixtures/adtest.html` が参照する素材で、`scripts/verify-adtest.sh` が最初に呼ぶ。
+//       `<dir>` が無ければ作る。生成したパスを 1 行ずつ stdout に出す。
+//       終了コード: 0 = 書けた / 8 = 作れない・書けない / 1 = 引数不正
+//
+//   rec-probe analyze <wav|m4a> [--main 440] [--ad 1000] [--expect-main 秒] [--silence]
+//       録音結果のトーン判定（Goertzel）。既定は本編 440 Hz / 広告 1000 Hz。
+//         既定（--silence なし） … `ToneVerdict` を JSON 1 行で stdout に出す
+//                                  （adWindows / mainSeconds / silentSeconds / totalSeconds）。
+//                                  `--expect-main 秒` があれば **adWindows == 0 かつ
+//                                  |mainSeconds - 秒| < 1.0** のときだけ exit 0、他は exit 1。
+//                                  `--expect-main` が無ければ JSON を出して exit 0（判定しない）。
+//         --silence              … 全ゼロ判定だけを行う（他のオプションは無視）。
+//                                  全ゼロなら stdout に出して exit 1、非ゼロなら exit 0。
+//       終了コード: 0 = 期待どおり / 1 = 期待と不一致・全ゼロ・引数不正・ファイルが読めない
 
 import AVFoundation
 import CoreAudio
@@ -45,6 +59,7 @@ let usage = """
 usage:
   rec-probe list
   rec-probe tap <system|processes|bundleids|hybrid> <seconds> [--prefix <bundle-id-prefix>] [--bundle-id <id>]... [--autostart]
+  rec-probe tones <dir>
   rec-probe analyze <file> [--main <Hz>] [--ad <Hz>] [--expect-main <seconds>] [--silence]
 """
 
@@ -364,10 +379,113 @@ func runTap(_ args: [String]) {
     exit(everNonZero ? 0 : 4)
 }
 
+/// `Tests/Fixtures/adtest.html` が参照する 2 本のトーンを書く。
+///
+/// 本編 440 Hz・12 秒 / 広告 1 kHz・4 秒（PLAN「決めた事項」#12 の adtest.html と対になる値）。
+func runTones(_ args: [String]) {
+    guard args.count == 1 else { fail(usage, 1) }
+    let dir = URL(fileURLWithPath: args[0], isDirectory: true)
+    let mainURL = dir.appendingPathComponent("main.wav")
+    let adURL = dir.appendingPathComponent("ad.wav")
+    do {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try writeTone(url: mainURL, hz: 440, seconds: 12)
+        try writeTone(url: adURL, hz: 1000, seconds: 4)
+    } catch {
+        fail("トーンを書けません（\(dir.path)）: \(error)", 8)
+    }
+    print(mainURL.path)
+    print(adURL.path)
+}
+
+struct AnalyzeOptions {
+    var path = ""
+    var mainHz = 440.0
+    var adHz = 1000.0
+    var expectMain: Double?
+    var silence = false
+}
+
+func parseAnalyzeOptions(_ args: [String]) -> AnalyzeOptions {
+    var o = AnalyzeOptions()
+    guard let path = args.first else { fail(usage, 1) }
+    o.path = path
+
+    /// `--main` / `--ad` / `--expect-main` の値を読む（読めなければ exit 1）。
+    func number(_ args: [String], _ i: Int, _ flag: String) -> Double {
+        guard i + 1 < args.count else { fail("\(flag) に値がありません", 1) }
+        guard let value = Double(args[i + 1]) else {
+            fail("\(flag) は数値で指定してください: \(args[i + 1])", 1)
+        }
+        return value
+    }
+
+    var i = 1
+    while i < args.count {
+        switch args[i] {
+        case "--main":
+            o.mainHz = number(args, i, "--main")
+            i += 2
+        case "--ad":
+            o.adHz = number(args, i, "--ad")
+            i += 2
+        case "--expect-main":
+            o.expectMain = number(args, i, "--expect-main")
+            i += 2
+        case "--silence":
+            o.silence = true
+            i += 1
+        default:
+            fail("未知のオプション: \(args[i])\n\(usage)", 1)
+        }
+    }
+    return o
+}
+
 func runAnalyze(_ args: [String]) {
-    // T10 が中身を書く（Goertzel で main/ad のトーンを判定し、混入窓と欠落を数える）。
-    guard !args.isEmpty else { fail(usage, 1) }
-    fail("analyze は未実装（T10）。対象: \(args[0])", 1)
+    let o = parseAnalyzeOptions(args)
+    let url = URL(fileURLWithPath: o.path)
+
+    // `--silence` は他のオプションと併用されても全ゼロ判定だけを行う。
+    if o.silence {
+        let zero: Bool
+        do {
+            zero = try isAllZero(url: url)
+        } catch {
+            fail("読めません（\(url.path)）: \(error)", 1)
+        }
+        if zero {
+            print("全ゼロ: \(url.path)")
+            exit(1)
+        }
+        exit(0)
+    }
+
+    let verdict: ToneVerdict
+    do {
+        verdict = try analyze(url: url, mainHz: o.mainHz, adHz: o.adHz)
+    } catch {
+        fail("解析できません（\(url.path)）: \(error)", 1)
+    }
+
+    // 4 キーのアルファベット順 = adWindows / mainSeconds / silentSeconds / totalSeconds。
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    guard let data = try? encoder.encode(verdict),
+          let line = String(data: data, encoding: .utf8)
+    else {
+        fail("verdict を JSON にできません", 1)
+    }
+    print(line)
+
+    // `--expect-main` が無いときは判定しない。
+    guard let expect = o.expectMain else { exit(0) }
+    guard verdict.adWindows == 0, abs(verdict.mainSeconds - expect) < 1.0 else {
+        fail("期待と不一致（adWindows=\(verdict.adWindows) "
+            + String(format: "mainSeconds=%.2f expect-main=%.2f", verdict.mainSeconds, expect)
+            + "。合格は adWindows == 0 かつ差 < 1.0 秒）", 1)
+    }
+    exit(0)
 }
 
 // MARK: - エントリ
@@ -382,6 +500,8 @@ case "list":
     runList()
 case "tap":
     runTap(Array(argv.dropFirst()))
+case "tones":
+    runTones(Array(argv.dropFirst()))
 case "analyze":
     runAnalyze(Array(argv.dropFirst()))
 case "-h", "--help", "help":

@@ -67,4 +67,14 @@ public enum Tuning {
 
     /// `dur > len × ssaiDurationRatio` なら SSAI（サーバ側広告挿入）の可能性を 1 回だけ警告する。
     public static let ssaiDurationRatio: Double = 1.2
+
+    // MARK: - トーン判定（検証用。PLAN T10）
+
+    /// 「広告が優勢な窓」と判定する比率。ad のトーンのエネルギーが main の
+    /// `toneAdDominanceRatio` 倍を超えたら広告混入とみなす（`ToneAnalyzer.analyze`）。
+    public static let toneAdDominanceRatio: Double = 3.0
+
+    /// トーン判定で「可聴」とみなす下限（dBFS）。これ以下の窓は比率に関わらず広告混入に数えない
+    /// （無音の数値雑音で ad 優勢になるのを防ぐ）。無音判定そのものは `silenceDBFS`。
+    public static let toneAudibleDBFS: Double = -50.0
 }
