@@ -1,6 +1,12 @@
 {
   "permissions": {
     "allow": [
+      "Bash(./.build/debug/rec:*)",
+      "Bash(./.build/release/rec:*)",
+      "Bash(.build/debug/rec:*)",
+      "Bash(.build/release/rec:*)",
+      "Bash(afconvert:*)",
+      "Bash(afinfo:*)",
       "Bash(cat:*)",
       "Bash(date:*)",
       "Bash(diff:*)",
@@ -27,11 +33,17 @@
       "Bash(jq:*)",
       "Bash(ls:*)",
       "Bash(mkdir:*)",
+      "Bash(osascript:*)",
+      "Bash(python3 -m http.server:*)",
       "Bash(rg:*)",
+      "Bash(sdef:*)",
       "Bash(sort:*)",
+      "Bash(swift:*)",
+      "Bash(swiftc:*)",
       "Bash(tail:*)",
       "Bash(uniq:*)",
       "Bash(wc:*)",
+      "Bash(xcrun:*)",
       "Read(~/workspaces/**)",
       "WebFetch(domain:*)",
       "WebSearch"
@@ -39,5 +51,8 @@
     "deny": [
       "mcp__lean-ctx"
     ]
+  },
+  "env": {
+    "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"
   }
 }
