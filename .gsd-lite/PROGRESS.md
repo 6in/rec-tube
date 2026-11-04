@@ -583,3 +583,4 @@
   （「ブラウザが自動再生を拒否しました（<name>）」）に合わせる。(5) E11 の順序はハンドラが
   `sessionQueue` 上で呼ばれることに依存している（`PowerWatcher(source:queue:)` に別キューを渡すと静かに崩れる）。
   `RecordingSession.run()` にコメントは入れたが `PowerWatcher.swift` 側には印が無い
+- 承認待ち（ループ計測・turn 15）: 9 件 — Bash: bash, Bash: for, Bash: git, Bash: rg ×3, Bash: swift ×2, Bash: touch
