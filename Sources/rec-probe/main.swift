@@ -42,17 +42,23 @@ import CoreAudio
 import Foundation
 import RecCore
 
+// パイプの読み手が先に閉じても `print` で死なない（E14）。出力の失敗は黙って捨てる。
+// **トップレベルの先頭**で張る。
+_ = signal(SIGPIPE, SIG_IGN)
+
 // MARK: - 出力
 
+/// 人向けの行は `RecCore.writeStderr`（fd 2 への `write(2)` ループ）だけを通す。
+/// `FileHandle.standardError` の `write(_:)` は fd 2 が閉じていると SIGABRT になるので使わない（E13）。
 func fail(_ message: String, _ code: Int32) -> Never {
-    FileHandle.standardError.write(Data("rec-probe: \(message)\n".utf8))
+    writeStderr("rec-probe: \(message)")
     exit(code)
 }
 
 /// 進行の目印。どの Core Audio 呼び出しで止まったかを時間切れの後からでも読めるようにする
 /// （stdout はパイプ越しにバッファされるので stderr に即書きする）。
 func step(_ message: String) {
-    FileHandle.standardError.write(Data("rec-probe: step \(message)\n".utf8))
+    writeStderr("rec-probe: step \(message)")
 }
 
 let usage = """

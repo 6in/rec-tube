@@ -85,6 +85,63 @@ func sanitizeTruncatesAtCharacterBoundary() throws {
     #expect(result.count == 50)
 }
 
+/// 3 バイト文字は 66 文字（198 バイト）で止まる（67 文字 = 201 バイトは上限超え）。
+@Test("sanitizeFileName truncates 3-byte characters to 66 characters (198 bytes)")
+func sanitizeTruncatesThreeByteCharacters() throws {
+    let input = String(repeating: "あ", count: 100)
+    #expect(input.utf8.count == 300)
+
+    let result = try #require(sanitizeFileName(input))
+    #expect(result.count == 66)
+    #expect(result.utf8.count == 198)
+    #expect(result.allSatisfy { $0 == "あ" })
+}
+
+/// 基底文字 + 結合文字の Character が 200 バイト目をまたぐとき、結合文字だけを切り離さない。
+///
+/// 素材は `"a" × 197` + `(ア + U+0301)` × 10。1 クラスタは 5 バイト（3 + 2）で NFC では合成されない。
+/// スカラ単位で切る実装なら 197 + 3 = 200 バイトまで入り、末尾が基底から切り離された `ア` になる。
+/// Character 単位で切る契約なら、クラスタ全体（5 バイト）が入らないので `"a" × 197` で止まる。
+@Test("sanitizeFileName keeps a combining mark attached to its base at the 200-byte cut")
+func sanitizeDoesNotSplitCombiningMarks() throws {
+    let cluster = "\u{30A2}\u{0301}"
+    #expect(cluster.count == 1)
+    #expect(cluster.utf8.count == 5)
+    // NFC で合成されない（合成されると素材の前提が崩れる）。
+    #expect(cluster.precomposedStringWithCanonicalMapping == cluster)
+
+    let input = String(repeating: "a", count: 197) + String(repeating: cluster, count: 10)
+    let result = try #require(sanitizeFileName(input))
+
+    #expect(result.utf8.count <= 200)
+    #expect(result == String(repeating: "a", count: 197))
+    // 基底から切り離された結合文字も、基底だけ残った半端なクラスタも無い。
+    #expect(!result.unicodeScalars.contains("\u{0301}"))
+    #expect(!result.unicodeScalars.contains("\u{30A2}"))
+    // Character 境界が保たれている = NFC 済みの入力の Character 列の接頭辞そのもの。
+    let normalized = Array(input.precomposedStringWithCanonicalMapping)
+    #expect(Array(result) == Array(normalized.prefix(result.count)))
+}
+
+/// 200 バイトで切った直後の末尾が空白 / ピリオドになる素材では、もう一度落とす。
+///
+/// 素材は `"a" × 199` + 空白（またはピリオド）+ `"b" × 50`。200 バイト目がちょうど空白 /
+/// ピリオドなので、切ったあとに末尾を落とし直さないと末尾の空白 / ピリオドが残ってしまう。
+@Test(
+    "sanitizeFileName trims a trailing space or period exposed by the 200-byte cut",
+    arguments: [" ", "."]
+)
+func sanitizeTrimsTrailingAfterTruncation(trailing: String) throws {
+    let input = String(repeating: "a", count: 199) + trailing + String(repeating: "b", count: 50)
+    let result = try #require(sanitizeFileName(input))
+
+    #expect(result == String(repeating: "a", count: 199))
+    #expect(result.utf8.count == 199)
+    let last = try #require(result.last)
+    #expect(last != ".")
+    #expect(!last.isWhitespace)
+}
+
 /// NFD の「ガ」は NFC の 1 文字（U+30AC）になる。
 @Test("sanitizeFileName normalizes NFD to NFC")
 func sanitizeNormalizesToNFC() throws {

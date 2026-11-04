@@ -168,9 +168,7 @@ public final class RecordingSession: @unchecked Sendable {
                 makeWriter: @escaping (URL, AVAudioFormat) throws -> AudioFileWriting
                     = { try AVAudioFileWriter(url: $0, format: $1) },
                 now: @escaping () -> Date = Date.init,
-                onMessage: @escaping (String) -> Void = { message in
-                    FileHandle.standardError.write(Data((message + "\n").utf8))
-                },
+                onMessage: @escaping (String) -> Void = { writeStderr($0) },
                 completion: @escaping (ExitCode) -> Void) {
         self.mode = mode
         self.output = output

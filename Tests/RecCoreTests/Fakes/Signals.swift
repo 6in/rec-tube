@@ -17,6 +17,16 @@ enum Signals {
         AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channels)!
     }
 
+    /// interleaved な float32 フォーマット（48 kHz / 2ch）。`format` との違いはサンプルの並び方だけ。
+    /// この形式のバッファは `floatChannelData[c]` が同じ領域を指し、`stride == channels` になる。
+    static func interleavedFormat(sampleRate: Double = 48_000,
+                                  channels: AVAudioChannelCount = 2) -> AVAudioFormat {
+        AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                      sampleRate: sampleRate,
+                      channels: channels,
+                      interleaved: true)!
+    }
+
     /// 全ゼロ。
     static func zeros(format: AVAudioFormat, frames: AVAudioFrameCount) -> AVAudioPCMBuffer {
         make(format: format, frames: frames) { _, _ in 0 }
@@ -84,6 +94,9 @@ enum Signals {
     }
 
     /// `frameLength` を埋めたバッファを作る。`fill(channel, frame) -> Float`。
+    ///
+    /// 書き込みは `buf.stride` 間隔で行う（interleaved では `stride == channels`、
+    /// non-interleaved では 1 なので従来と同じ位置に書く）。
     static func make(format: AVAudioFormat,
                      frames: AVAudioFrameCount,
                      fill: (_ channel: Int, _ frame: Int) -> Float) -> AVAudioPCMBuffer {
@@ -93,7 +106,7 @@ enum Signals {
         for channel in 0 ..< Int(format.channelCount) {
             let ptr = data[channel]
             for frame in 0 ..< Int(frames) {
-                ptr[frame] = fill(channel, frame)
+                ptr[frame * buf.stride] = fill(channel, frame)
             }
         }
         return buf

@@ -769,7 +769,7 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
   - 並列サブ作業: A: `Messages` + `RecordingSession` + `StopCoordinator` + `RecordingSessionTests`（親が `Messages` の署名を先に確定させる）/
     B: `SessionPolicy` + `SessionPolicyTests`（表 E10 / E12 と PLAN #10 の訂正文だけを渡す）
 
-- [ ] F2: 出力経路の堅牢性（stderr / stdout の失敗で死なない）、`fail()` の後始末、`-o` の分解、小さな修正とテストの補強（VERIFICATION §4「堅牢性」）
+- [x] F2: 出力経路の堅牢性（stderr / stdout の失敗で死なない）、`fail()` の後始末、`-o` の分解、小さな修正とテストの補強（VERIFICATION §4「堅牢性」）
   - 完了基準:
     - 人向け出力の口を 1 つにする: `Sources/RecCore/Console.swift` に `public func writeStderr(_ line: String)`（`fputs` か `write(2)` のループ。
       **失敗は無視する**。`FileHandle.write(_:)` を使わない）。`RecordingSession` の既定 `onMessage`、`Sources/rec/main.swift` の catch、
@@ -795,6 +795,33 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
     `Tests/RecCoreTests/CLITests.swift`, `Tests/RecCoreTests/SilenceMeterTests.swift`, `Tests/RecCoreTests/OutputPathTests.swift`, `Tests/RecCoreTests/ProbeResultTests.swift`
   - 依存: F1（`RecordingSession.finish` / `fail` の共通化は F1 の後に行う。F1 と同じターンで続けてよい）
   - 並列サブ作業: A: `Console` + `main.swift` 2 本 + `fail()` + `CLI.splitOutputPath` + `CLITests` / B: `ScriptRunner` + `SilenceMeter` + `OutputPath` + 3 つのテスト補強
+  - **F2 の実測（turn 16）**:
+    - **E19 の 2 行が直った**（他の行は round 1 と同一、`TRACEBACK!` 0 件）:
+      `bogus-stderr-closed` `signal=6`（SIGABRT）→ **`exit=1`**、`list-stdout-closedpipe` `signal=13`（SIGPIPE）→ **`exit=0`**。
+      原因は 2 つで、両方要る: (1) `FileHandle.standardError.write(_:)` は fd 2 が閉じていると
+      **Objective-C 例外（Swift から catch 不可）で SIGABRT**になる → `Console.writeStderr` の `write(2)` ループに置換、
+      (2) stdout の読み手が居ないパイプへの `print` は SIGPIPE で即死する → 両 main の**トップレベル先頭**で
+      `_ = signal(SIGPIPE, SIG_IGN)`。`write(2)` は EINTR だけ再試行し、**0 と EPIPE / EBADF / EAGAIN は黙って捨てる**
+      （0 を捨てないと無限ループになる）
+    - **確定した API**: `Console.swift` の `public func writeStderr(_ line: String)`（RecCore の**唯一の stderr の出口**。
+      `rg -n 'standardError\.write' Sources` が 0 行）、`CLI.swift` の
+      `public func splitOutputPath(_ path: String) throws -> SessionOutput`、
+      `Tuning.osascriptKillGraceSeconds` / `Tuning.osascriptPipeGraceSeconds`（どちらも 2.0）
+    - `splitOutputPath` の契約の補足（PLAN 本文に無かった点を実装で確定）:
+      (1) 拡張子の判定は **`ext == "m4a"` の厳密一致**（`-o x.M4A` は usage エラー）
+      (2) `-o` の分解は**モード判定の後**に走るので、`rec --list -o ''` は `--list` が先に exit 0 する
+          （契約は `-o ''` 単体の exit 1 だけを定めている）
+      (3) 「既存のディレクトリか」を `FileManager` で 1 回見るので、`CLI.swift` は厳密には純粋関数ではなくなった
+          （`parseArguments` は純粋のまま。ヘッダコメントを訂正した）
+    - `SilenceMeter` の interleaved 対応は **`buf.stride` を「ポインタの前進」と「vDSP の stride」の両方に掛ける**
+      （`channelData[c] + offset * stride` と `vDSP_maxmgv` / `vDSP_vspdp` の stride 引数）。
+      `floatChannelData[c]` は interleaved では同じ領域への 1 サンプルずつずれたポインタ。
+      書き込み先の `scratch` は stride 1 のまま（詰めて並べる）。non-interleaved は `stride == 1` で挙動不変。
+      B が**突然変異テストで確認**: stride を 1 に戻すと interleaved の dBFS が 30.76 dB ずれてテストが落ちる
+    - `Tests/RecCoreTests/Fakes/Signals.swift` の `make` は書き込みを `ptr[frame * buf.stride]` にした
+      （非 interleaved では stride == 1 なので `DelayLine` / `RecordingPipeline` のテストに影響なし。両方 green を確認）
+    - `ScriptRunner` の打ち切り経路（SIGTERM → SIGKILL、パイプの grace）には**単体テストが無い**
+      （本物の `osascript` を起動しないと再現できない）。今回は `NSLock` の追加と数値の `Tuning` 移動だけで挙動は変えていない
 
 - [ ] F3: 文書とスクリプトの整合（VERIFICATION §4「文書・スクリプト」。すべて 1 タスクにまとめる）
   - 完了基準:
@@ -810,6 +837,9 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
     - `python3 -m http.server 8765 --bind 127.0.0.1 --directory Tests/Fixtures`（README 172 行目と `verify-adtest.sh` 76 行目）
     - `scripts/final-check.sh`: `-g '!Sources/rec-probe/**'`（`rg` の `-g` はパス全体に当てる。実測: `!rec-probe/**` は除外しない）、
       数値リテラルの正規表現を `(^|[^0-9.])0\.7([^0-9]|$)` の形で前後を縛る。F1 で足した `Messages` の行が README「終了コード」表の「主な StopReason」と矛盾しないことを目視
+    - **PLAN 追記（F2 turn 16）**: README 73 行目の `-o` の説明を E18 に合わせる
+      （現在は「拡張子が無ければ `.m4a` を付ける」だけ → 「拡張子は `m4a` のみ。他を渡すと usage エラー（exit 1）。無ければ付ける」）。
+      根拠: F2 で `splitOutputPath` が `m4a` 以外の拡張子を `.usage` にしたので、README の記述が実物より緩い
     - README「既知の制約」に 3 行: Chrome を終了していると `--url` が Chrome を起動してしまい `gone` で exit 6 になる / poll 中の osascript（最大 15 秒）の間はシグナル処理が遅れる /
       終了処理中は 2 度目の Ctrl-C が効かない（SIGKILL なら止まるが m4a は壊れる）。README「許可」1 に「全編無音 → exit 4 の症状と `scripts/verify-permission.sh`」を 1 行
     - 決めた事項 #2 の本文を訂正（「running になるまで待つ」は T8 で作らないと決めた。根拠は T8 実測 (7)。許可後の実機で (b)(c)(d) を測るのは変わらず）

@@ -40,6 +40,14 @@ public enum Tuning {
     /// `osascript` 1 回の実行に許す時間（秒）。
     public static let osascriptTimeoutSeconds: Double = 15
 
+    /// `osascript` を打ち切るとき、`terminate()`（SIGTERM）から SIGKILL に進むまで待つ時間（秒）。
+    /// SIGKILL を送った後に終了を待つ時間にも同じ値を使う。
+    public static let osascriptKillGraceSeconds: Double = 2
+
+    /// 打ち切った `osascript` のパイプの読み出しが終わるのを待つ時間（秒）。
+    /// 超えたら読めた分だけで返す（相手がパイプを握り続けていても戻る）。
+    public static let osascriptPipeGraceSeconds: Double = 2
+
     /// `AudioDeviceCreateIOProcIDWithBlock` 等、tap 開始の各段に許す時間（秒）。
     /// 許可が降りていないと無期限にブロックするので watchdog が必要（T2 turn 4 の実測）。
     public static let tapStartTimeoutSeconds: Double = 10

@@ -100,14 +100,15 @@ public final class OsascriptRunner: ScriptRunner {
         if exited.wait(timeout: .now() + timeout) == .timedOut {
             timedOut = true
             process.terminate()
-            if exited.wait(timeout: .now() + 2) == .timedOut, process.isRunning {
+            if exited.wait(timeout: .now() + Tuning.osascriptKillGraceSeconds) == .timedOut,
+               process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
-                _ = exited.wait(timeout: .now() + 2)
+                _ = exited.wait(timeout: .now() + Tuning.osascriptKillGraceSeconds)
             }
         }
 
         // パイプが閉じるまで待つ。打ち切った相手が握り続けている場合は諦めて進む。
-        _ = reads.wait(timeout: .now() + 2)
+        _ = reads.wait(timeout: .now() + Tuning.osascriptPipeGraceSeconds)
 
         let stdout = String(decoding: out.data, as: UTF8.self)
         let stderr = String(decoding: err.data, as: UTF8.self)
@@ -125,7 +126,24 @@ public final class OsascriptRunner: ScriptRunner {
 }
 
 /// 並行キューのクロージャから書き込むための箱（`var` を直接キャプチャできないため）。
-/// 書き手は 1 つずつで、`DispatchGroup` の完了が読み出しとの境界になる。
+///
+/// 読みも書きも `NSLock` で守る。`DispatchGroup` の完了だけには頼れない: 打ち切り経路では
+/// `reads.wait` が `Tuning.osascriptPipeGraceSeconds` で諦めて先に進むので、読み出しスレッドが
+/// まだ書いている最中に本体が `data` を読む可能性がある。
 private final class DataBox: @unchecked Sendable {
-    var data = Data()
+    private let lock = NSLock()
+    private var storage = Data()
+
+    var data: Data {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+        set {
+            lock.lock()
+            storage = newValue
+            lock.unlock()
+        }
+    }
 }

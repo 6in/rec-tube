@@ -2,7 +2,8 @@
 //
 // 役割分担:
 //   - 引数 → `Options`: `RecCore.parseArguments`（`Sources/RecCore/CLI.swift`）。ここは何も解釈しない
-//   - `--list` の表示 / `--app` の解決 / `-o` の分解: このファイル（`Options` と `RecordingSession` の橋渡し）
+//   - `--list` の表示 / `--app` の解決: このファイル（`Options` と `RecordingSession` の橋渡し）
+//   - `-o` の分解: `RecCore.splitOutputPath`（`Sources/RecCore/CLI.swift`）
 //   - 実際の録音: `RecordingSession`（`Sources/RecCore/RecordingSession.swift`）
 //
 // 断言（PLAN P1）: **`exit()` を呼ぶのはこのファイルだけ**。`Sources/RecCore` 配下は終了コードを
@@ -11,6 +12,10 @@
 
 import Foundation
 import RecCore
+
+// パイプの読み手が先に閉じても `print` で死なない（E14）。出力の失敗は黙って捨てる。
+// **トップレベルの先頭**で張る（`--list` の `print` より前であること）。
+_ = signal(SIGPIPE, SIG_IGN)
 
 // MARK: - 橋渡し（`Options` → `RecordingSession` の入力）
 
@@ -29,23 +34,6 @@ func resolveAppTarget(_ prefix: String) throws -> TapTarget {
         bundleIDs.append(proc.bundle)
     }
     return .bundleIDs(bundleIDs, seed: matched.map(\.id))
-}
-
-/// `-o` の値を `SessionOutput` の 3 要素（親ディレクトリ / 名前 / 拡張子）に分ける。
-///
-/// `-o` があっても必ず `SessionOutput` 経由にする。`RecordingSession` が `reserveUniquePath` を
-/// 通すので、同名のファイルがあれば `-2` / `-3` … が付く。
-func sessionOutput(for path: String?) -> SessionOutput {
-    guard let path else {
-        // 既定: カレントディレクトリに `rec-<日時>.m4a`（名前は `RecordingSession` が決める）。
-        return SessionOutput(directory: URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
-                             explicitBaseName: nil,
-                             ext: "m4a")
-    }
-    let url = URL(fileURLWithPath: path)
-    return SessionOutput(directory: url.deletingLastPathComponent(),
-                         explicitBaseName: url.deletingPathExtension().lastPathComponent,
-                         ext: url.pathExtension.isEmpty ? "m4a" : url.pathExtension)
 }
 
 // MARK: - 本体
@@ -69,17 +57,29 @@ do {
         mode = .url(url)
     }
 
+    // `-o` があれば分解する（不正なら `.usage` が飛ぶ）。無ければカレントディレクトリに
+    // `rec-<日時>.m4a`（名前は `RecordingSession` が決める）。
+    let output: SessionOutput
+    if let path = options.output {
+        output = try splitOutputPath(path)
+    } else {
+        output = SessionOutput(directory: URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
+                               explicitBaseName: nil,
+                               ext: "m4a")
+    }
+
     let session = RecordingSession(mode: mode,
-                                   output: sessionOutput(for: options.output),
+                                   output: output,
                                    adGuardSeconds: options.adGuard,
                                    completion: { code in exit(code.rawValue) })
     session.start()
     // `completion` が `exit()` を呼ぶまでここで待つ（`dispatchMain()` は戻らない）。
     dispatchMain()
 } catch let e as RecError {
-    FileHandle.standardError.write(Data("error: \(e.message)\n".utf8))
+    // fd 2 が閉じていても死なない（E13）。出力の失敗は黙って捨てて終了コードだけ返す。
+    writeStderr("error: \(e.message)")
     exit(e.code.rawValue)
 } catch {
-    FileHandle.standardError.write(Data("error: \(error)\n".utf8))
+    writeStderr("error: \(error)")
     exit(ExitCode.coreAudio.rawValue)
 }

@@ -1,7 +1,9 @@
-// CLI.swift — コマンドラインの解釈。**ここは何も実行しない**（純粋関数 + 文字列）。
+// CLI.swift — コマンドラインの解釈。**ここは録音を始めない**（`parseArguments` は純粋関数 + 文字列。
+// `splitOutputPath` だけは「既存のディレクトリか」を見るので FileManager を 1 回読む）。
 //
 // 役割分担:
 //   - 引数 → `Options`（このファイル）
+//   - `-o` の値 → `SessionOutput`（このファイルの `splitOutputPath`）
 //   - `Options` → 実際の録音（`Sources/rec/main.swift` が `RecordingSession` を組む）
 //   - `exit()` を呼ぶのは `Sources/rec/main.swift` だけ（PLAN P1）
 //
@@ -51,7 +53,7 @@ public struct Options: Sendable, Equatable {
     }
 
     public let mode: Mode
-    /// `-o` の値（未指定なら nil）。分解は `Sources/rec/main.swift` の仕事。
+    /// `-o` の値（未指定なら nil）。分解は `splitOutputPath(_:)`。
     public let output: String?
     /// 広告ガードの秒数。既定は `Tuning.adGuardSeconds`。
     public let adGuard: Double
@@ -103,6 +105,42 @@ public func parseArguments(_ args: [String]) throws -> Options {
     }
 
     return Options(mode: mode, output: output, adGuard: adGuard)
+}
+
+// MARK: - `-o` の分解
+
+/// `-o` の値を `SessionOutput` の 3 要素（親ディレクトリ / 名前 / 拡張子）に分ける。
+///
+/// `-o` があっても必ず `SessionOutput` 経由にする。`RecordingSession` が `reserveUniquePath` を
+/// 通すので、同名のファイルがあれば `-2` / `-3` … が付く。
+///
+/// 断言（PLAN の検証表 E16 / E17 / E18）:
+///   - `""`（空文字列）は `.usage`（E16）
+///   - 末尾が `/`、または**既に存在するディレクトリ**なら、そのディレクトリ +
+///     `explicitBaseName: nil` + `ext: "m4a"`（E17。名前は `RecordingSession` が決める）
+///   - 拡張子が `m4a` 以外なら `.usage`（E18）。**拡張子が無ければ `m4a` を使う**
+///
+/// - Throws: `RecError(code: .usage, ...)` のみ
+public func splitOutputPath(_ path: String) throws -> SessionOutput {
+    guard !path.isEmpty else { throw usageError("-o の出力先が空です。") }
+
+    // 末尾の `/` か、既に存在するディレクトリなら「その中に既定名で作る」指定（E17）。
+    var isDirectory: ObjCBool = false
+    let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+    if path.hasSuffix("/") || (exists && isDirectory.boolValue) {
+        return SessionOutput(directory: URL(fileURLWithPath: path, isDirectory: true),
+                             explicitBaseName: nil,
+                             ext: "m4a")
+    }
+
+    let url = URL(fileURLWithPath: path)
+    let ext = url.pathExtension
+    guard ext.isEmpty || ext == "m4a" else {
+        throw usageError("-o の拡張子は m4a だけです（無ければ m4a を付けます）: \(path)")
+    }
+    return SessionOutput(directory: url.deletingLastPathComponent(),
+                         explicitBaseName: url.deletingPathExtension().lastPathComponent,
+                         ext: "m4a")
 }
 
 // MARK: - 補助

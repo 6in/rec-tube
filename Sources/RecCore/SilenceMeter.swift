@@ -99,6 +99,11 @@ public final class SilenceMeter: @unchecked Sendable {
     /// バッファ 1 つを取り込む。窓の境界に達したらその場で窓を確定し、端数は次の窓へ繰り越す。
     ///
     /// `floatChannelData` が nil（float32 以外）のバッファと `frameLength == 0` のバッファは無視する。
+    ///
+    /// interleaved / non-interleaved の両方を読む。`floatChannelData[c]` は interleaved なら
+    /// **同じ領域への 1 サンプルずつずれたポインタ**で、1 チャンネルのサンプルは `buf.stride`
+    /// （= チャンネル数）間隔に並ぶ。non-interleaved なら `buf.stride == 1`。どちらも
+    /// 「ポインタの前進」と「vDSP の stride」の両方に `buf.stride` を掛ける必要がある。
     public func ingest(_ buf: AVAudioPCMBuffer, gateOpen: Bool) {
         guard let channelData = buf.floatChannelData else { return }
         let frames = Int(buf.frameLength)
@@ -107,12 +112,16 @@ public final class SilenceMeter: @unchecked Sendable {
         guard windowFrames > 0 else { return }
 
         let channelCount = Int(buf.format.channelCount)
+        let sampleStride = buf.stride
         var offset = 0
         while offset < frames {
             // 窓の残りとバッファの残りの小さい方だけ取り込む（1 バッファが複数の窓にまたがる場合がある）。
             let take = min(windowFrames - windowFrameCount, frames - offset)
             for channel in 0 ..< channelCount {
-                accumulate(channelData[channel] + offset, count: take)
+                // 窓の途中から読むときの前進もサンプル単位なので `stride` 倍する。
+                accumulate(channelData[channel] + offset * sampleStride,
+                           count: take,
+                           stride: sampleStride)
             }
             windowFrameCount += take
             windowSampleCount += take * channelCount
@@ -124,22 +133,26 @@ public final class SilenceMeter: @unchecked Sendable {
     }
 
     /// 1 チャンネル分の区間を窓の累算に足す（二乗和と「全ゼロか」）。
-    private func accumulate(_ samples: UnsafePointer<Float>, count: Int) {
+    ///
+    /// `stride` は 1 チャンネルのサンプル間隔（interleaved ならチャンネル数、non-interleaved なら 1）。
+    private func accumulate(_ samples: UnsafePointer<Float>, count: Int, stride: Int) {
         guard count > 0 else { return }
         let length = vDSP_Length(count)
+        let sampleStride = vDSP_Stride(stride)
 
         // 「ちょうど 0.0 か」は最大絶対値で見る（二乗和はアンダーフローで 0 になり得るため分けて測る）。
         if windowAllZero {
             var maxMagnitude: Float = 0
-            vDSP_maxmgv(samples, 1, &maxMagnitude, length)
+            vDSP_maxmgv(samples, sampleStride, &maxMagnitude, length)
             if maxMagnitude != 0 { windowAllZero = false }
         }
 
         // float32 → Double に広げてから二乗和を取る。-60 dBFS ちょうどの境界を float32 の
         // 丸めで踏み外さないため、累算は必ず Double で行う。
+        // 読み出し側だけ `sampleStride`、書き込み先の `scratch` は詰めて並べる（stride 1）。
         scratch.withUnsafeMutableBufferPointer { buffer in
             guard let base = buffer.baseAddress else { return }
-            vDSP_vspdp(samples, 1, base, 1, length)
+            vDSP_vspdp(samples, sampleStride, base, 1, length)
             var sumSquares = 0.0
             vDSP_svesqD(base, 1, &sumSquares, length)
             windowSumSquares += sumSquares

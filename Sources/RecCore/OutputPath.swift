@@ -52,6 +52,7 @@ private func isDisallowedInFileName(_ scalar: Unicode.Scalar) -> Bool {
 ///   3. 末尾の空白とピリオドを落とす
 ///   4. NFC 正規化する
 ///   5. UTF-8 200 バイトで切る（Character 境界で切るので結合文字・マルチバイト文字を割らない）
+///   6. 切った末尾に出た空白とピリオドをもう一度落とす
 ///
 /// - Returns: 残るものが無ければ `nil`（呼び出し側は `defaultBaseName(now:)` に落とす）。
 public func sanitizeFileName(_ title: String) -> String? {
@@ -84,6 +85,10 @@ public func sanitizeFileName(_ title: String) -> String? {
             used += width
         }
         work = truncated
+
+        // 6. 切った末尾が空白やピリオドになることがある（`"…a ."` のように 200 バイト目の直前が
+        //    空白 / ピリオドの素材）。3. と同じ条件でもう一度落とす。全部落ちたら下で nil になる。
+        while let last = work.last, last == "." || last.isWhitespace { work.removeLast() }
     }
 
     return work.isEmpty ? nil : work

@@ -6,8 +6,9 @@
 //  1. `parseProbe` は throw しない。壊れた JSON・未知の enum 値・必須キー欠落はすべて `.none`。
 //  2. `dur` は数値 / `"inf"` / `"nan"` の 3 通りだけを受け、それ以外の文字列はデコード失敗。
 //  3. `live` は JSON の `live` をそのまま読む（`dur` が無限でも Swift 側で推論しない）。
-//  4. `CodingKeys.allCases.count == 9` かつ `probeJS` に 9 個のキー名が全部現れる
-//     （JS の `JSON.stringify` とデコーダのキー数のずれを検出する）。
+//  4. `CodingKeys.allCases.count == 9` かつ `probeJS` の `JSON.stringify({...})` のキー集合が
+//     `CodingKeys` の rawValue 集合と**完全一致**する（部分文字列照合ではなく集合比較なので、
+//     JS 側とデコーダ側のキーの過不足を両方向で検出する）。
 //  5. セレクタと巻き戻し秒は `Tuning` 由来（JS 直書きの禁止）。
 
 import Foundation
@@ -189,11 +190,39 @@ struct ProbeResultTests {
         #expect(ProbeResult.CodingKeys.allCases.count == 9)
     }
 
-    @Test("probeJS の本文に 9 個のキー名がすべて現れる")
-    func probeJSMentionsEveryKey() {
-        for key in ProbeResult.CodingKeys.allCases {
-            #expect(probeJS.contains(key.rawValue), "probeJS に \(key.rawValue) が無い")
+    /// `probeJS` の `JSON.stringify({...})` のリテラルから `キー名:` の並びを抜き出す。
+    ///
+    /// リテラルの形が変わって読めなくなったら `nil`（テストを落とすため。黙って通さない）。
+    /// 重複キーを検出できるよう `Set` ではなく出現順の配列で返す。
+    private func probeJSStringifyKeys() -> [String]? {
+        let marker = "JSON.stringify({"
+        guard let open = probeJS.range(of: marker),
+              let close = probeJS.range(of: "})", range: open.upperBound ..< probeJS.endIndex)
+        else { return nil }
+
+        let body = probeJS[open.upperBound ..< close.lowerBound]
+        guard !body.isEmpty else { return nil }
+
+        var keys: [String] = []
+        // 現在のリテラルは値にカンマを含まない（`kind:kind,…,playErr:playErr`）。
+        for pair in body.split(separator: ",") {
+            guard let colon = pair.firstIndex(of: ":") else { return nil }
+            let key = pair[pair.startIndex ..< colon].trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty else { return nil }
+            keys.append(key)
         }
+        return keys.isEmpty ? nil : keys
+    }
+
+    @Test("probeJS の JSON.stringify のキー集合は CodingKeys と完全一致する（過不足の両方を検出）")
+    func probeJSKeysMatchCodingKeysExactly() throws {
+        let keys = try #require(probeJSStringifyKeys(),
+                                "probeJS の JSON.stringify({...}) からキー名を抜き出せなかった")
+        let expected = Set(ProbeResult.CodingKeys.allCases.map(\.rawValue))
+
+        // 重複キーが Set に潰されていないこと（JS 側で同じキーを 2 回書いた場合の検出）。
+        #expect(keys.count == Set(keys).count)
+        #expect(Set(keys) == expected)
     }
 
     // MARK: - 7. 調整値の直書き禁止

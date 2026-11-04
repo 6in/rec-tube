@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import RecCore
@@ -211,4 +212,88 @@ func cliValidAdGuard(value: String, expected: Double) throws {
     let options = try parseArguments(["--ad-guard", value])
     #expect(options.adGuard == expected)
     #expect(Tuning.adGuardRange.contains(options.adGuard))
+}
+
+// MARK: - `-o` の分解（検証表 E16 / E17 / E18）
+
+/// `splitOutputPath` も不正な値は必ず `RecError(code: .usage)` + `usageText` で返すこと
+/// （`parseArguments` と同じ作法）。
+private func expectOutputUsageError(
+    _ path: String,
+    sourceLocation: SourceLocation = #_sourceLocation
+) {
+    do {
+        let output = try splitOutputPath(path)
+        #expect(
+            Bool(false),
+            "-o '\(path)' は .usage を throw すべきなのに \(output.directory.path) を返した",
+            sourceLocation: sourceLocation
+        )
+    } catch let error as RecError {
+        #expect(error.code == .usage, "-o '\(path)' の code", sourceLocation: sourceLocation)
+        #expect(
+            error.message.contains(usageText),
+            "-o '\(path)' の message に usageText が含まれていない",
+            sourceLocation: sourceLocation
+        )
+    } catch {
+        #expect(
+            Bool(false),
+            "-o '\(path)' は RecError 以外を throw した: \(error)",
+            sourceLocation: sourceLocation
+        )
+    }
+}
+
+/// E16: `-o ''`（空文字列）は usage エラー。
+@Test("splitOutputPath rejects an empty path")
+func cliSplitOutputEmptyPath() {
+    expectOutputUsageError("")
+}
+
+/// E17（既存のディレクトリ）: そのディレクトリ + 名前は `RecordingSession` 任せ + `m4a`。
+@Test("splitOutputPath treats an existing directory as a destination directory")
+func cliSplitOutputExistingDirectory() throws {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rec-cli-split-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    // 末尾に `/` を付けずに渡して「既存のディレクトリ」の判定だけを確かめる。
+    let output = try splitOutputPath(dir.path)
+    #expect(output.directory.path == dir.path)
+    #expect(output.explicitBaseName == nil)
+    #expect(output.ext == "m4a")
+}
+
+/// E17（末尾が `/`）: 存在しなくてもディレクトリ指定として扱う。
+@Test("splitOutputPath treats a trailing slash as a destination directory")
+func cliSplitOutputTrailingSlash() throws {
+    let output = try splitOutputPath("out/sub/")
+    #expect(output.directory.lastPathComponent == "sub")
+    #expect(output.explicitBaseName == nil)
+    #expect(output.ext == "m4a")
+}
+
+/// E18: 拡張子が `m4a` 以外なら usage エラー。
+@Test("splitOutputPath rejects an extension other than m4a")
+func cliSplitOutputWrongExtension() {
+    expectOutputUsageError("x.wav")
+}
+
+/// 名前の中のドットは名前の一部（`a.b.m4a` → base は `a.b`）。
+@Test("splitOutputPath keeps dots inside the base name")
+func cliSplitOutputDottedBaseName() throws {
+    let output = try splitOutputPath("a.b.m4a")
+    #expect(output.explicitBaseName == "a.b")
+    #expect(output.ext == "m4a")
+}
+
+/// 親ディレクトリ付きのパスは directory と base に分かれる。
+@Test("splitOutputPath splits a path with a parent directory")
+func cliSplitOutputWithParentDirectory() throws {
+    let output = try splitOutputPath("dir/sub.m4a")
+    #expect(output.directory.lastPathComponent == "dir")
+    #expect(output.explicitBaseName == "sub")
+    #expect(output.ext == "m4a")
 }
