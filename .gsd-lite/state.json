@@ -19,8 +19,8 @@
     "path": "."
   },
   "milestone": "rec-cli-hardening",
-  "phase": "plan",
-  "next_command": "/gsd-lite-plan",
+  "phase": "blocked",
+  "next_command": "BLOCKED",
   "branch": {
     "name": "gsd-lite/rec-cli-hardening",
     "base": "main"
@@ -35,7 +35,7 @@
       "~/workspaces"
     ]
   },
-  "turn": 1,
+  "turn": 2,
   "max_turns": 60,
   "retry_max": 2,
   "verify_round": 0,
@@ -47,5 +47,5 @@
     "verify": "claude-fable-5-1",
     "reflect": "claude-fable-5-1"
   },
-  "updated_at": "2026-11-04T18:10:16+09:00"
+  "updated_at": "2026-11-04T18:25:58+09:00"
 }
