@@ -584,3 +584,40 @@
   `sessionQueue` 上で呼ばれることに依存している（`PowerWatcher(source:queue:)` に別キューを渡すと静かに崩れる）。
   `RecordingSession.run()` にコメントは入れたが `PowerWatcher.swift` 側には印が無い
 - 承認待ち（ループ計測・turn 15）: 9 件 — Bash: bash, Bash: for, Bash: git, Bash: rg ×3, Bash: swift ×2, Bash: touch
+
+## turn 16 — impl — F2 出力経路の堅牢性、`-o` の分解、interleaved メータ、テスト補強
+
+- やったこと: PLAN どおりサブエージェント 2 本を並行に出した。A（`Console.swift` 新規 + `rec` /
+  `rec-probe` の両 main + `RecordingSession` の既定 `onMessage` + `CLI.splitOutputPath` + `CLITests`）、
+  B（`ScriptRunner` の `NSLock` と `Tuning` 移動 + `SilenceMeter` の stride 読み + `sanitizeFileName` の
+  再トリム + `SilenceMeter` / `OutputPath` / `ProbeResult` のテスト補強 + `Fakes/Signals.swift`）。
+  担当ファイルは重ならないように割り、`fail()` の後始末（F1 で実装済み）は飛ばした。
+  親が統合して `swift test` **220 本 green**（+12 本）、新しい scratch path での
+  `swift build --build-tests` が warning 0、`rg` 3 本（`standardError\.write` / 数値リテラル /
+  `RecCore` の `exit(`）がすべて 0 行、**E19 の格子を実測**して確認した
+- 想定外: (1) **E19 の 2 行は原因が別で、両方直さないと落ちる**。`bogus-stderr-closed` の SIGABRT は
+  `FileHandle.standardError.write(_:)` が fd 2 閉鎖時に **Objective-C 例外（Swift から catch 不可）**を
+  投げるせいで、`write(2)` ループへの置換で直る。`list-stdout-closedpipe` の SIGPIPE は `print` 側なので
+  `signal(SIGPIPE, SIG_IGN)` が要る。**実測で両方 `exit=1` / `exit=0` になったことを確認**（他の行は
+  round 1 と同一、`TRACEBACK!` 0 件）。(2) **`writeStderr` の `write(2)` が 0 を返す場合を捨てないと
+  無限ループになる**（`offset` が進まないまま while を回り続ける）。A の実装は 0 で return している。
+  (3) **E18 で README が実物より緩くなった**。README 73 行目は「拡張子が無ければ `.m4a` を付ける」だけで、
+  `m4a` 以外を usage エラーにする話が無い。F3 の完了基準に 1 行足した（PLAN 追記）。
+  (4) B の `Signals.make` の変更（`ptr[frame]` → `ptr[frame * buf.stride]`）は `DelayLine` /
+  `RecordingPipeline` のテストも使う共有物だが、非 interleaved では `stride == 1` なので挙動不変。
+  両テストの green を B が確認済み
+- やり直し: 0 回（A が 1 回、B の編集中のファイルでビルドエラーを踏んだが、依頼文の「担当外のエラーなら
+  10〜20 秒待って再ビルド」で自己解決した。turn 15 と同じ現象で、対処も効いた）
+- 次への注意: (1) **期待値を変えた既存テストは 0 件**（verify はここを見る）。`ProbeResultTests` の
+  「9 キーが現れる」1 本だけ**断言を強めた**（部分文字列照合 → `JSON.stringify` のキー集合と
+  `CodingKeys` の完全一致。過不足の両方を検出する）。テスト名も変わっている。
+  (2) 次は **F3**（最後のタスク）。F3 は F1 の `Messages.autoplayRejected` の文言
+  （「ブラウザが自動再生を拒否しました（<name>）」）と、F2 で足した **README 73 行目の `-o` の訂正**
+  （PLAN の F3 完了基準に追記済み）を参照する。(3) **`scripts/final-check.sh` の `rg` 検査は
+  F2 の変更を見ていない**。`Console.swift` が増え、`standardError\.write` が 0 になったので、
+  final-check に `rg -n 'standardError\.write' Sources` を 1 行足すかは F3 の判断
+  （PLAN の完了基準には無いので足すなら PLAN 訂正として残す）。(4) `ScriptRunner` の打ち切り経路
+  （SIGTERM → SIGKILL、パイプの grace）は**単体テストが無い**まま（本物の `osascript` が要る）。
+  今回の変更は `NSLock` と `Tuning` 移動だけで挙動は変えていない。
+  (5) E19 の格子は `url-space` / `url-newline` が各 62.5 秒、tap を張る 3 行が各 10 秒かかるので
+  **1 回 2.5 分**。verify で回すときは `run_in_background` か長い timeout を見ておくこと
