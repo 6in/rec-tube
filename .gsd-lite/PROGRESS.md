@@ -49,3 +49,4 @@
   （`.helper.renderer` / `.helper.gpu` 等は出ない）。決めた事項 #2 の `chromeBundleIDs` はここを起点に絞る。
   なお rec 自身が `dev.rec-tube.rec` として列挙されており、Info.plist が実行時にも効いていることが分かる。
   (3) PLAN / RESEARCH の `rec.swift:NN` は `git show main:rec.swift` で引く（final-check.sh が Sources/README への混入を弾く）
+- 承認待ち（ループ計測・turn 3）: 6 件 — Bash: bash ×2, Bash: build.sh ×2, Bash: gsd-lite-loop.sh, Bash: rec
