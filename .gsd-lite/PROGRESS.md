@@ -90,3 +90,4 @@
   iTerm2 を許可して iTerm2 を再起動する**必要がある（PLAN メモの「verify 前に必要な人の操作」）。
   (5) T2 (0) の実測値: 再生中に `running` になる Chrome は **`com.google.Chrome.helper` のみ**（`com.google.Chrome` は `no` のまま）。
   `Chrome.bundleIDs` はこの 2 名に確定。許可が降りたら `swift run rec-probe tap bundleids|hybrid|processes 3` で (a)〜(e) を測り直す
+- 承認待ち（ループ計測・turn 4）: 3 件 — Bash: gsd-lite-loop.sh, Bash: rec, Bash: rec-probe
