@@ -339,7 +339,7 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
     - `Legacy.swift` の `Recorder` は **`LegacyRecorder` に改名**（`recordURL` / `recordLive` もろとも T9 で消える）。
       `AudioFileWriter.swift` のコメントの参照も合わせた
 
-- [ ] T6: 停止の一本化（`StopCoordinator`）、シグナル（INT/TERM/HUP）、スリープ（IOKit）
+- [x] T6: 停止の一本化（`StopCoordinator`）、シグナル（INT/TERM/HUP）、スリープ（IOKit）
   - 完了基準:
     - `Sources/RecCore/StopCoordinator.swift`: `final class StopCoordinator: @unchecked Sendable`（`func request(_ reason: StopReason) -> Bool`（最初の 1 回だけ true。
       `OSAllocatedUnfairLock` か直列キュー）、`var reason: StopReason?`、`onFirstRequest: (StopReason) -> Void` を**セッションキュー**で 1 回呼ぶ）。
@@ -360,6 +360,41 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
   - 並列サブ作業:
     - A: StopCoordinator + SignalWatcher + テスト（対象: `StopCoordinator.swift`, `SignalWatcher.swift`, 両テスト）
     - B: PowerWatcher + FakePowerSource + テスト（対象: `PowerWatcher.swift`, `Fakes/FakePowerSource.swift`, `PowerWatcherTests.swift`）
+  - **T6 の実測（turn 8）**:
+    - **PLAN 追記: IOKit のメッセージ種別は Swift から参照できない**。`kIOMessageSystemWillSleep` 等は
+      `iokit_common_msg(0x280)` という入れ子マクロで、clang importer が
+      `macro 'kIOMessageSystemWillSleep' unavailable: structure not supported` と落とす。
+      → `PowerNotification` の static 定数 3 本に値を書いた
+      （`systemWillSleep = 0xE000_0280` / `canSystemSleep = 0xE000_0270` / `systemHasPoweredOn = 0xE000_0300`。
+      導出 `iokit_common_msg(m) = 0xE000_0000 | m` はコメントに、値は `_Static_assert` を clang で通して確認）。
+      秒数・dBFS ではないので `Tuning` には置かない（この 3 本が唯一の置き場）
+    - **PLAN 追記: `Package.swift` の変更は不要**。`import IOKit` / `import IOKit.pwr_mgt` だけで
+      autolink され、`rec` / `rec-probe` のリンクも通る（`-framework IOKit` は要らない）
+    - 確定した API（T8 / T9 はこの名前で配線する）:
+      `StopCoordinator(queue:onFirstRequest:)` / `request(_:) -> Bool` / `reason: StopReason?`；
+      `SignalWatcher(signals:queue:handler:)` / `cancel()`；
+      `PowerNotification(messageType:argument:)` + 上の static 定数 3 本 / `PowerSource`（`register(queue:handler:)` /
+      `unregister()` / `acknowledge(_:)`）/ `IOKitPowerSource()` / `PowerWatcher(source:queue:handler:)` /
+      `start() throws` / `stop()`
+    - 契約の補足（PLAN 本文に無かった点を実装で確定）:
+      (1) **`onFirstRequest` と `handler` は init で注入する**（後から差せるプロパティにしない）。
+          根拠: 可変プロパティにすると「`request` と代入の競合」を型の中で防げない
+      (2) `StopCoordinator.request` は**ロックの外で** `queue.async` する。IO キュー（`sink` の中）から
+          呼ばれても、ハンドラは必ずセッションキューに移る（`TapRecorder.stop()` の `ioQueue.sync {}` 回避）
+      (3) `PowerWatcher.handler` の引数は `StopReason`（`.sleep` を渡す）。専用の enum は作らない
+      (4) `IOKitPowerSource.unregister` の順序は QA1340 のサンプルどおり
+          「`IONotificationPortSetDispatchQueue(port, nil)`（配送停止）→ `IODeregisterForSystemPower` →
+          `IOServiceClose` → `IONotificationPortDestroy`」。**配送を止めてから port を壊す**
+          （走っているコールバックと破棄がすれ違わない）
+      (5) ack は `receive` の `defer` に置いた。`WillSleep` は handler → ack、`CanSystemSleep` は ack のみ、
+          `HasPoweredOn` は `default` で何もしない（ack を呼ばない経路を作らない）
+      (6) `request(_:)` に `@discardableResult` は**付けていない**。T8 / T9 で戻り値を見ない呼び出しは
+          `_ = coordinator.request(...)` と書く
+    - **既存テストの期待値を変えた箇所（1 件・期待値そのものは不変）**:
+      `Tests/RecCoreTests/TapRecorderTests.swift` の `aggregateDescriptionDisablesTapAutoStart` で
+      `try #require(boolValue(...))` → `#expect(autoStart == false)` に変えた。理由: `Bool?` を `#require` に
+      渡すと「条件として見るか unwrap するか」が曖昧で warning になる（T5 からの持ち越し）。
+      比較 1 本で「辞書にある」と「false」を同時に見るので検査の強さは同じ
 
 - [ ] T7: Chrome 制御（`ScriptRunner` / `ChromeController` / probe JS と `ProbeResult`）
   - 完了基準:

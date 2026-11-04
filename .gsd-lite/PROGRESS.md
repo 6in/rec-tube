@@ -216,3 +216,44 @@
   (7) 実機の許可（システム設定 > プライバシーとセキュリティ > システム音声の録音で iTerm2 を許可 →
   iTerm2 再起動）はまだ必要。T10 / T11 の verify-* に入る前に人の操作が要る
 - 承認待ち（ループ計測・turn 7）: 5 件 — Bash: Hxcrun, Bash: find, Bash: git, Bash: grep, Bash: gsd-lite-loop.sh
+
+## turn 8 — impl — T6 停止の一本化（`StopCoordinator` / `SignalWatcher` / `PowerWatcher`）
+- やったこと: PLAN どおり A（`StopCoordinator` + `SignalWatcher` + 両テスト）/ B（`PowerWatcher` +
+  `FakePowerSource` + テスト）の 2 本を並列サブエージェントに出し（共有型が無いので親の先出しは不要だった）、
+  統合して検証。`swift test` 75 本 green（既存 64 + 新規 11）、debug / release ビルド green、
+  `swift build --build-tests` の warning 0、`rec --bogus` が 1 / `--list` が 0、
+  `rg 'rec\.swift:[0-9]' Sources README.md` が 0 件
+- 想定外: (1) **IOKit のメッセージ種別が Swift から参照できない**。`kIOMessageSystemWillSleep` 等は
+  `iokit_common_msg(0x280)` の入れ子マクロで、clang importer が
+  `macro 'kIOMessageSystemWillSleep' unavailable: structure not supported` と落とす。
+  → `PowerNotification` の static 定数 3 本に値を書いた（`0xE000_0280` / `0xE000_0270` / `0xE000_0300`。
+  導出 `0xE000_0000 | m` をコメントに残し、値は `_Static_assert` を clang で通して確認）。PLAN に追記
+  (2) **並列の片方のビルドエラーがもう片方を止めた**。B の `PowerWatcher.swift` が上記 (1) で
+  コンパイルを落としている間、A は同じ `RecCore` モジュールのテストをビルドできず待たされた
+  （`--scratch-path` を分けても**ソースツリーは 1 つ**なので、モジュール内の構文エラーは共有される）。
+  今回は B が直って自然に解けたが、次に同じ形が出たら「待たされた側は自分の担当ファイルだけ
+  `swiftc -typecheck` で確かめる」で先に進める（A はそれで警告 0 を確認していた）
+  (3) `#require` に `Bool?` を渡すと「条件か unwrap か」が曖昧で warning になる（T5 からの持ち越し。
+  turn 7 の「warning 0」はテストビルドを含めていなかった）。`#expect(autoStart == false)` に直した。
+  **今後の warning 確認は `swift build --build-tests` で見る**（`swift build` だけではテストを見ない）
+  (4) `swift build --build-tests` は差分ビルドだと既存の warning を再表示しないので、
+  判定は新しい `--scratch-path` で 1 回回して確かめた
+- 既存テストの期待値を変えた箇所（1 件・期待値そのものは不変）: `TapRecorderTests` の
+  `aggregateDescriptionDisablesTapAutoStart`。`try #require(boolValue(...))` → `#expect(autoStart == false)`。
+  理由は上記 (3)。`nil`（辞書に無い）でも `true` でも落ちるので検査の強さは同じ
+- やり直し: 0 回（親の統合での修正は warning 1 件の手直しだけ。並列の 2 本はどちらも一発で契約を満たした）
+- 次への注意: (1) 次は **T7**（`ScriptRunner` / `ChromeController` / `ProbeJS` + `ProbeResult`）。
+  実機の Chrome 許可に依存しない形（`ScriptRunner` を注入してテスト）で書けるのが要点。
+  並列サブ作業は PLAN どおりで、**共有型は `ScriptResult` / `ScriptRunner` protocol の 2 つだけなので
+  親が先に確定させてから分配する**（T3 / T4 / T5 と同じ）。
+  (2) **T8 / T9 の配線の約束**: `StopCoordinator(queue:onFirstRequest:)` はセッションキューを渡し、
+  `request` の戻り値を見ない呼び出しは `_ = coordinator.request(...)` と書く（`@discardableResult` は
+  付けていない）。`PowerWatcher` の handler は `StopReason` を受けて `.sleep` が来る。
+  `SignalWatcher` / `PowerWatcher` は**変数に保持し続ける**（手放すと `deinit` で監視が止まる）。
+  (3) `IOKitPowerSource` は**ユニットテストで使えない**（実機のスリープを起こせない）。
+  「スリープで止まって m4a が再生できる」は VERIFICATION の手動項目（`pmset sleepnow` は
+  決めた事項 #1 で allowlist に入れていないので、人が手で寝かせる）。
+  (4) `swift test --sanitize=thread` はこの環境では動かない（turn 7 の実測）。並行性は
+  「10 スレッド同時 request / 同時 stop」のテストで担保している。
+  (5) 実機の許可（システム設定 > プライバシーとセキュリティ > システム音声の録音で iTerm2 を許可 →
+  iTerm2 再起動）はまだ必要。T10 / T11 の verify-* に入る前に人の操作が要る
