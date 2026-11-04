@@ -458,3 +458,4 @@
   ⑤ `tones` の 440 / 1000 Hz・12 / 4 秒を `Tuning` に移す案（却下。`Tuning` は `RecCore` = 製品コードの
   調整値置き場で、検証素材の寸法は道具側の値。`adtest.html` のコメントと対で保つ）。
   採用した逸脱は 1 つだけ: `verify-adtest.sh` の `mkdir -p "$SCRATCH"`（scratch が無いときの失敗を読めるようにする 1 行）
+- 承認待ち（ループ計測・turn 12）: 2 件 — Bash: bash, Bash: zsh
