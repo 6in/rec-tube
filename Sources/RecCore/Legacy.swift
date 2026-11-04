@@ -177,61 +177,9 @@ func chromeJS(_ tabID: String, _ js: String) -> String? {
 
 // MARK: - modes
 
-public func recordURL(_ url: String, path: String) throws {
-    guard let tab = chromeOpen(url) else {
-        throw RecError(code: .chromeUnavailable, message: "Chrome を開けませんでした")
-    }
-    print("Chrome で開きました。再生待ち…")
-
-    // Chrome の音声プロセスが出力を始めるまで待つ
-    let prefix = "com.google.Chrome"
-    var targets: [AudioObjectID] = []
-    let deadline = Date().addingTimeInterval(60)
-    while targets.isEmpty {
-        guard Date() < deadline else {
-            throw RecError(code: .pageLost, message: "60秒待っても音が出ませんでした")
-        }
-        _ = chromeJS(tab, legacyProbeJS)
-        Thread.sleep(forTimeInterval: 0.5)
-        if try audioProcesses().contains(where: { $0.bundle.hasPrefix(prefix) && $0.running }) {
-            targets = try audioProcesses().filter { $0.bundle.hasPrefix(prefix) }.map(\.id)
-        }
-    }
-
-    let rec = try LegacyRecorder(targets: targets, path: path, writing: false)
-    installSigint { rec.stop(); print("\n中断: \(path)") }
-
-    // 本編が既に流れていたら頭出し（取りこぼし防止）
-    if let s = chromeJS(tab, legacyProbeJS), s.hasPrefix("main") {
-        chromeJS(tab, "(function(){var v=document.querySelector('video');if(v)v.currentTime=0;return 'ok';})()")
-    }
-
-    var videoID: String?
-    var lastWriting = false
-    loop: while true {
-        Thread.sleep(forTimeInterval: 0.3)
-        guard let s = chromeJS(tab, legacyProbeJS) else { continue }
-        if s == "gone" { print("\nタブが閉じられました"); break }
-        let f = s.split(separator: " ").map(String.init)
-        guard f.count == 5 else { continue }
-        let (kind, state, vid, cur, dur) = (f[0], f[1], f[2], f[3], f[4])
-
-        if kind == "main" {
-            if videoID == nil { videoID = vid }
-            if vid != videoID { print("\n次の動画に遷移したので停止"); break loop }
-            if state == "ended" { print("\n再生終了"); break loop }
-        }
-        let w = kind == "main" && state == "playing"
-        if w != lastWriting { rec.setWriting(w); lastWriting = w }
-        let label = kind == "ad" ? "広告(スキップ)" : (w ? "録音中" : "待機")
-        print("\r\(label) \(cur)/\(dur)s   ", terminator: "")
-        fflush(stdout)
-    }
-
-    rec.stop()
-    chromeTab(tab, "close t\nreturn \"ok\"")
-    print("保存しました: \(path)")
-}
+// `recordURL` は T8（turn 10）で削除した。`--url` は `RecordingSession`（`SessionPolicy` +
+// `TapRecorder` + `ChromeController`）が担う。`main.swift` の配線は T8 では暫定で、本配線は T9。
+// 旧実装の中身を見たいときは `git show main:rec.swift` を参照する。
 
 public func recordLive(targets: [AudioObjectID]?, path: String) throws -> Never {
     let rec = try LegacyRecorder(targets: targets, path: path)

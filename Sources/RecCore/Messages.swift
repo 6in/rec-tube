@@ -50,4 +50,26 @@ public enum Messages {
     public static let liveStream = """
         ライブ配信・プレミア公開は録音の対象外です。録音を中止しました。
         """
+
+    /// overload 警告: IOProc が締め切りに間に合わなかった（`RecorderEvent.overload`）。
+    ///
+    /// **これ自体は録音を止めない**（決めた事項 #10 の最後の行「`.overload` はログのみ」）。
+    public static let overload = """
+        オーディオの処理が追いついていません（overload）。録音は続けます。
+        """
+
+    /// SSAI 警告: 尺が公称より長い（サーバ側広告挿入の疑い。決めた事項 #8）。
+    ///
+    /// `SessionPolicy` が `.warn(Messages.ssaiWarning)` で 1 回だけ出す。
+    public static let ssaiWarning = """
+        動画の尺が公称より長いため、SSAI（サーバ側広告挿入）の可能性があります。広告が録音に混ざるかもしれません。
+        """
+
+    /// 無音警告: gate が開いているのに無音が続いている（決めた事項 #6）。
+    ///
+    /// `SessionPolicy` が `.warn(Messages.silenceWarning)` で出す（再送は
+    /// `Tuning.silenceWarnIntervalSeconds` 以内は抑える）。
+    public static let silenceWarning = """
+        無音が続いています。システム音声の録音許可と再生音量を確認してください。
+        """
 }

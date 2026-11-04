@@ -477,7 +477,7 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
       (c) JS 許可（表示 > 開発/管理 > Apple Events からの JavaScript）は**未確認**（タブを開く副作用を
       無人ターンで起こさないため。verify-permission.sh / T10 で確かめる）
 
-- [ ] T8: `--url` の状態機械（`SessionPolicy`）と `RecordingSession`（オーケストレーション）
+- [x] T8: `--url` の状態機械（`SessionPolicy`）と `RecordingSession`（オーケストレーション）
   - 完了基準:
     - `Sources/RecCore/SessionPolicy.swift`: 純粋な状態機械。`struct SessionPolicy`（`mutating func step(probe: ProbeOutcome, meter: MeterSnapshot, now: Date) -> [SessionAction]`、
       `enum SessionAction { case wait, startRecording(title: String?), seekToStart, openGate, closeGateDiscard, closeGateHold, rewindThenOpenGate, warn(String), stop(StopReason) }`）。
@@ -501,6 +501,60 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
     - A: SessionPolicy（対象: `SessionPolicy.swift`）
     - B: SessionPolicy のテストを #10 の表から独立に書く（対象: `SessionPolicyTests.swift`。A の実装は見ない）
     - C: RecordingSession + テスト（対象: `RecordingSession.swift`, `RecordingSessionTests.swift`。A の `SessionAction` 名は上記で固定）
+  - **T8 の実測（turn 10）**:
+    - **PLAN 訂正: 対象ファイルを 3 つ足した**。(1) `Sources/RecCore/SessionAction.swift`（新規。
+      `SessionAction` は A / B / C の 3 者が同時に参照する共有型なので、「共有型は親が先に確定させる」
+      （T5 / T6 / T7 で 3 ターン続けて有効だった形）に従ってファイルごと親が作った。PLAN 本文は
+      `SessionPolicy.swift` 内に置くと書いていたが、A がそのファイルの持ち主なので分けた）、
+      (2) `Sources/RecCore/Messages.swift`（`ssaiWarning` / `silenceWarning` の 2 定数を追加。
+      決めた事項 #10 の `warn(...)` の文面を Messages に集める既存方針に合わせ、親が先に確定させた。
+      B のテストが `Messages.ssaiWarning` を参照できるようにするため）、
+      (3) `Sources/rec/main.swift`（`Legacy.swift` から `recordURL` を削ると `--url` の呼び出し元が
+      消えるので、`RecordingSession` への暫定配線を親が入れた。本配線は T9）
+    - **決めた事項 #10 の表の補完（評価順を確定した）**: 表は行の羅列で順序を書いていないので、
+      A / B / C に渡す仕様として次の順を固定した（これが T8 の唯一の正）:
+      `gone` → 録音開始前（`none`/`nil`/`loading` の 60 秒判定 → 初回完全状態の live → startRecording）→
+      録音開始後（`none` の 20 秒判定 → `main` の id 違い（nextVideo） → `main ended` →
+      全ゼロ 10 秒（tapStalled / permissionSuspected） → gate 操作 1 つ → SSAI 警告 → 無音警告）。
+      **stop が当たったら戻り値は `[.stop(理由)]` の 1 要素だけ**（gate 操作も警告も付けない）。
+      境界は `60 秒超`（`>`）/ `20 秒連続`（`>=`）/ `全ゼロ 10 秒`（`>=`）/ `無音 5 秒`（`>=`）/
+      `再警告は 30 秒超`（`>`）
+    - **表に無かった入力の扱い**: 録音開始後の `main loading` は `wait`（表の `loading` 行は
+      「録音開始前」限定なので、開始後は gate を動かさず待つ）。初回完全状態が `main ended` なら
+      `[.startRecording(title:), .stop(.ended)]`（表をそのまま順に適用した結果。特別扱いを足さない）
+    - **PLAN 訂正: 決めた事項 #8 に `len > 0` を足した**。#8 の条件は `dur` 有限 かつ `len` あり かつ
+      `dur > len × 1.2` だけだが、`len == 0`（`vd.lengthSeconds` が `"0"`。`ProbeJS` の契約では
+      `Number()` が NaN のときだけ `nil` になるので 0 は素通りする）だと `dur > 0` が必ず真になり、
+      **普通の動画で毎回 SSAI 警告が出る**。#8 の「公称より長い」は公称が分かっている場合の話なので、
+      `len == 0`（= 公称不明）では警告しない。サブ作業 A が「契約外なので実装しない」と報告で挙げ、
+      親が仕様の不備と判断して入れた（`SessionPolicyTests` に 1 本追加して固定）
+    - 確定した API（T9 はこの名前で配線する）:
+      `SessionAction { wait, startRecording(title:), seekToStart, openGate, closeGateDiscard,
+      closeGateHold, rewindThenOpenGate, warn(String), stop(StopReason) }`（`Equatable`）；
+      `SessionPolicy(startedAt:)` / `mutating step(probe:meter:now:) -> [SessionAction]`（throw しない・空配列を返さない）；
+      `SessionMode { system, app(TapTarget), url(String) }`；
+      `SessionOutput(directory:explicitBaseName:ext:)`（`ext` の既定は `"m4a"`）；
+      `RecordingSession(mode:output:adGuardSeconds:hal:runner:powerSource:signals:pollInterval:startTimeout:makeWriter:now:onMessage:completion:)`
+      / `start()` / `requestStop(_:)`。**`completion` はちょうど 1 回**。`exit()` は呼ばない
+    - 契約の補足（実装で確定）:
+      (1) `RecordingSession` は `signals: []` と `powerSource: FakePowerSource()` でテストでき、
+          `requestStop(.signal(SIGINT))` が中断の刺激口になる（本物のシグナルをテストプロセスに張らない）
+      (2) **出力先の予約は「tap の開始に成功して format が確定した後」**（`reserveUniquePath` が
+          0 バイトのファイルを作るので、tap が作れない場合に空ファイルを残さない）。
+          `makeWriter` が失敗したときは予約したファイルを削除してから fail する
+      (3) url モードは `pipeline` を作った直後に **gate を閉じて**始める（policy が同じ step の続きで開く）。
+          `.system` / `.app` は `RecordingPipeline` の既定どおり gate 開で guard 0
+      (4) `pipeline.finish()`（= `writer.close()`）が throw したときは、**停止理由の code が 0 のときだけ**
+          `.outputUnavailable` に上書きする（決めた事項 #3 の優先順位と同じ扱い）
+      (5) `Messages.overload` / `Messages.ssaiWarning` / `Messages.silenceWarning` を追加した
+          （定型文は `Messages` に集める既存方針。`overload` は C がリテラルで書いたのを親が移した）
+      (6) **`SessionPolicy` は stop をラッチしない**（`.stop` を返した後も通常の判定を続ける）。
+          止めるのは `StopCoordinator`（最初の 1 本だけ採用）と `RecordingSession.poll`（`.stop` を
+          適用したら残りの指示を適用しない）の役
+      (7) url モードの seed は「`.startRecording` の時点で見えている Chrome のプロセス」。
+          決めた事項 #2 の「running になるまで待つ」ループは**作っていない**。policy の表が
+          「いつ録り始めるか」の唯一の正（#10）で、表は完全な probe 応答を条件にしているため
+          （旧実装の待ちループは同じことを別の手段でやっていた）。bundleIDs 単独でも tap は張れる（T2 の実測）
 
 - [ ] T9: CLI の配線（`main.swift` の一本化、3 モード復元、`--app` の bundleIDs 化、Legacy 削除）
   - 完了基準:
@@ -625,7 +679,8 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
 7. **全編無音の判定と tap 故障**: 終了時に `framesWritten > 0` かつ `audibleGateOpenWindows == 0` → exit 4（ファイルは残す）。`framesWritten == 0` → ファイル削除 + 「データなし」（exit は停止理由のまま。§8-3）。
    URL モードで `main playing` かつ `consecutiveAllZeroSeconds ≥ Tuning.tapStallSeconds (10)`: `everNonZero` なら `.tapStalled`（5）、そうでなければ `.permissionSuspected`（4）（§5.2, §8-1）。
    system / app モードではこの 10 秒判定は行わない（無音が正当にありうる）
-8. **SSAI 警告**: `dur` が有限で `len` があり `dur > len × 1.2` なら 1 回だけ警告（A5）
+8. **SSAI 警告**: `dur` が有限で `len` があり **`len > 0`** かつ `dur > len × 1.2` なら 1 回だけ警告（A5）。
+   `len > 0` は T8 turn 10 の訂正（`len == 0` = 公称不明だと `dur > 0` が必ず真で毎回警告が出る）
 9. **probe JSON**（`ProbeResult` のフィールド。JS と Decodable で同数にする）: `kind` (`"main"` / `"ad"`), `state` (`"playing"` / `"paused"` / `"ended"` / `"loading"`。`loading` は `v.readyState < 1`),
    `id` (`?v=` の値、無ければ `"-"`), `cur` (Double), `dur` (Double。`Infinity` は `"inf"`、`NaN` は `"nan"` の文字列で送り Swift 側で解釈), `live` (Bool:
    `vd.isLive === true || vd.isUpcoming === true || v.duration === Infinity`。`vd = window.ytInitialPlayerResponse?.videoDetails`), `title` (String?: `vd.title` → `document.title.replace(/ - YouTube$/, '')`),

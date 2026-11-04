@@ -40,7 +40,25 @@ let path: String = outPath ?? {
 
 do {
     if let url {
-        try recordURL(url, path: path)
+        // T8（turn 10）の暫定配線: `recordURL`（Legacy）を `RecordingSession` に置き換えた。
+        // 引数の検証（`Options` / `parseArguments`）と `-o` の分解、既定ファイル名の一本化は T9。
+        // ここでは `-o` があればその名前、無ければ probe のタイトル（`RecordingSession` が決める）を使う。
+        let outURL = URL(fileURLWithPath: path)
+        let session = RecordingSession(
+            mode: .url(url),
+            output: SessionOutput(
+                directory: outPath == nil
+                    ? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                    : outURL.deletingLastPathComponent(),
+                explicitBaseName: outPath == nil
+                    ? nil
+                    : outURL.deletingPathExtension().lastPathComponent,
+                ext: outPath == nil ? "m4a" : (outURL.pathExtension.isEmpty ? "m4a" : outURL.pathExtension)
+            ),
+            completion: { code in exit(code.rawValue) }
+        )
+        session.start()
+        dispatchMain()
     } else if let app {
         let targets = try audioProcesses().filter { $0.bundle.hasPrefix(app) }.map(\.id)
         guard !targets.isEmpty else {
