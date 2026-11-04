@@ -667,3 +667,4 @@
   今回は追従チェック節を `.gsd-lite/logs/rec-cli-hardening/scratch/turn-017-followup-check.sh` に
   写して `turn-017-syntax.swift` 経由で回した。**写しなので final-check.sh を直したら写しも直す**
   （verify が節を足すなら、ユーザーに `Bash(scripts/final-check.sh:*)` の追加を頼むのが本筋）
+- 承認待ち（ループ計測・turn 17）: 5 件 — Bash: bash ×2, Bash: final-check.sh, Bash: find, Bash: git
