@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "engine": "claude",
+  "phase_engines": {},
+  "codex": {
+    "model": {},
+    "reasoning_effort": {}
+  },
+  "opencode": {
+    "model": {},
+    "variant": {},
+    "agent": {}
+  },
+  "subagents": "auto",
+  "reflect": true,
+  "fix_round": 0,
+  "target": {
+    "name": "",
+    "path": "."
+  },
+  "milestone": "",
+  "phase": "discuss",
+  "next_command": "DISCUSS",
+  "branch": {
+    "name": "",
+    "base": ""
+  },
+  "research": {
+    "targets": [
+      "similar_oss",
+      "official_docs",
+      "local_projects"
+    ],
+    "local_search_paths": [
+      "~/workspaces"
+    ]
+  },
+  "turn": 0,
+  "max_turns": 60,
+  "retry_max": 2,
+  "verify_round": 0,
+  "verify_round_max": 3,
+  "model": {
+    "research": "claude-fable-5-1",
+    "plan": "claude-fable-5-1",
+    "impl": "claude-opus-5",
+    "verify": "claude-fable-5-1",
+    "reflect": "claude-fable-5-1"
+  },
+  "updated_at": "2026-11-04T13:46:55+09:00"
+}

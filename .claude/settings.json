@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "Bash(date:*)",
+      "Bash(diff:*)",
+      "Bash(find:*)",
+      "Bash(gh auth status:*)",
+      "Bash(gh pr create:*)",
+      "Bash(git add:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git commit:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git merge:*)",
+      "Bash(git pull:*)",
+      "Bash(git push:*)",
+      "Bash(git remote:*)",
+      "Bash(git show:*)",
+      "Bash(git status:*)",
+      "Bash(glab auth status:*)",
+      "Bash(glab mr create:*)",
+      "Bash(grep:*)",
+      "Bash(gsd-lite-loop.sh --where:*)",
+      "Bash(head:*)",
+      "Bash(jq:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(rg:*)",
+      "Bash(sort:*)",
+      "Bash(tail:*)",
+      "Bash(uniq:*)",
+      "Bash(wc:*)",
+      "Read(~/workspaces/**)",
+      "WebFetch(domain:*)",
+      "WebSearch"
+    ],
+    "deny": [
+      "mcp__lean-ctx"
+    ]
+  }
+}
