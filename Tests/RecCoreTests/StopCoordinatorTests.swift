@@ -9,6 +9,9 @@
 //   4. `onFirstRequest` は**呼び出し元のスレッドでは走らない**。init で渡したセッションキュー上で
 //      非同期に走る（IO キューから `request` を呼んだときに `TapRecorder.stop()` の
 //      `ioQueue.sync {}` で自己デッドロックしないための要件）
+//   5. `claim(_:)` は先勝ちで最初の 1 回だけ `true`。`reason` は上書きせず、**ハンドラを呼ばない・
+//      dispatch もしない**。`claim` のあとの `request` は `false` でハンドラも走らない
+//      （スリープで ack より前に `writer.close()` を終わらせるための受付口。E11）
 //
 // 書き方の約束:
 //   - `onFirstRequest` は別キューから呼ばれるので、受け取り側は NSLock で守った箱（`CallLog`）に貯める
@@ -185,5 +188,40 @@ struct StopCoordinatorTests {
         #expect(waitUntil { calls.count == 1 }, "onFirstRequest が呼ばれていない: \(calls.count) 回")
         #expect(calls.allReasons == [.ioStopped])
         #expect(calls.allLabels == ["session"], "onFirstRequest がセッションキュー以外で走った: \(calls.allLabels)")
+    }
+
+    // MARK: - 5. claim は受け付けるだけ（ハンドラを呼ばない・dispatch しない）
+
+    @Test("claim は最初の 1 回だけ true を返し、ハンドラを呼ばず dispatch もしない")
+    func claimWinsFirstWithoutDispatchingHandler() {
+        let session = DispatchQueue(label: "test.stop.session.claim")
+        let calls = CallLog()
+        let coordinator = StopCoordinator(queue: session) { reason in
+            calls.record(reason, label: nil)
+        }
+
+        #expect(coordinator.reason == nil, "claim 前の reason は nil のはず")
+
+        // 1 回目だけ true。
+        #expect(coordinator.claim(.sleep), "1 回目の claim は true のはず")
+        #expect(coordinator.reason == .sleep, "claim の時点で reason が読めるはず")
+
+        // 2 回目以降は理由が何であれ false で、`reason` は最初のまま。
+        #expect(coordinator.claim(.ended) == false, "2 回目の claim は false のはず")
+        #expect(coordinator.claim(.sleep) == false, "同じ理由の再 claim も false のはず")
+        #expect(coordinator.reason == .sleep,
+                "reason が上書きされた: \(String(describing: coordinator.reason))")
+
+        // `claim` のあとに `request` を呼んでも false。**ハンドラは走らない**
+        // （`request` が false のときは dispatch しない契約）。
+        #expect(coordinator.request(.signal(SIGINT)) == false, "claim 済みなら request は false のはず")
+        #expect(coordinator.reason == .sleep, "request で reason が上書きされた")
+
+        // セッションキューが空になるのを待ってから数える（`async` が残っていれば必ず拾える）。
+        session.sync {}
+        #expect(calls.count == 0, "claim でハンドラが呼ばれた: \(calls.allReasons)")
+
+        Thread.sleep(forTimeInterval: 0.1)
+        #expect(calls.count == 0, "claim のあとでハンドラが呼ばれた: \(calls.allReasons)")
     }
 }

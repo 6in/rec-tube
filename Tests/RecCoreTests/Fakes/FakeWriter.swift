@@ -19,6 +19,11 @@ final class FakeWriter: AudioFileWriting, @unchecked Sendable {
     var closeCount = 0
     /// 書き出し先（本物のファイルは作らない）。
     var url: URL
+    /// `close()` の観測口（`closeCount` を数えた直後に呼ぶ）。既定 nil なので何も起きない。
+    ///
+    /// 用途: スリープ（E11）の「`writer.close()` が ack より前に終わっている」を
+    /// 1 本の順序ログで見るため。
+    var onClose: (() -> Void)?
 
     init(url: URL = URL(fileURLWithPath: "/dev/null/fake.m4a"), writeError: Error? = nil) {
         self.url = url
@@ -33,5 +38,6 @@ final class FakeWriter: AudioFileWriting, @unchecked Sendable {
 
     func close() throws {
         closeCount += 1
+        onClose?()
     }
 }

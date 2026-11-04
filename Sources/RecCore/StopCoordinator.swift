@@ -8,6 +8,12 @@
 //   - `reason` は**最初に受け付けた理由のまま変わらない**（後から来た理由で上書きしない）
 //   - `onFirstRequest` は**ちょうど 1 回**、init で渡された**セッションキュー上で非同期に**呼ばれる。
 //     `request` の呼び出し元のスレッドでは呼ばない
+//   - `claim(_:)` は `request(_:)` の「受け付けの記録」だけを行う。**ハンドラを呼ばず dispatch も
+//     しない**ので、呼び出し元が自分で後始末を同期に通せる。先勝ちの規則は `request` と共有する
+//     （`claim` と `request` のどちらか最初の 1 本だけが `true`。`reason` は上書きしない）。
+//     使うのはスリープ通知の経路だけ（`PowerWatcher` の ack より先に `writer.close()` を
+//     終わらせる必要がある。E11）。**IO キューから `claim` して自分で後始末を呼んではいけない**
+//     （下記の自己デッドロックの理由がそのまま当てはまる）
 //
 // 3 番目が必須な理由（PLAN T5 turn 7 の申し送り (3)）: `TapRecorder.stop()` は内部で
 // `ioQueue.sync {}` を呼ぶ。IO キュー（= `sink` の中）から `request` を呼んだときに、
@@ -54,18 +60,30 @@ public final class StopCoordinator: @unchecked Sendable {
     /// - Returns: この呼び出しが**最初**だったときだけ `true`。そのときだけ `onFirstRequest` を
     ///   `queue` に非同期で投げる（この関数は投げるだけで戻る）。
     public func request(_ reason: StopReason) -> Bool {
-        lock.lock()
-        if accepted != nil {
-            // すでに決まっている。理由は上書きしない。
-            lock.unlock()
-            return false
-        }
-        accepted = reason
-        lock.unlock()
+        // 受け付けの判定は `claim` と 1 本（先勝ちの規則を 2 箇所に書かない）。
+        guard claim(reason) else { return false }
 
         // ロックの外で投げる（ハンドラが `reason` を読んでも詰まらないように）。
         let box = self.box
         queue.async { box.handler(reason) }
+        return true
+    }
+
+    /// 停止を**受け付けだけ**する（ハンドラを呼ばない・dispatch しない）。
+    ///
+    /// `request` との違いは「後始末を誰が通すか」だけ。`true` が返ったら、呼び出し元が
+    /// 自分で後始末（`RecordingSession.finish`）を通す責任を負う。`false` のときは
+    /// すでに別の理由で決まっているので何もしてはいけない。
+    ///
+    /// - Returns: この呼び出しが**最初**だったときだけ `true`。`reason` は上書きしない。
+    public func claim(_ reason: StopReason) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if accepted != nil {
+            // すでに決まっている。理由は上書きしない。
+            return false
+        }
+        accepted = reason
         return true
     }
 

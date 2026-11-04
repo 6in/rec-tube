@@ -16,8 +16,11 @@
 //          `[.stop(.pageUnresponsive)]`。正常値で復帰したら計測はやり直し
 //      3b. 判定順は b1 次動画 → b2 終了 → b3 tap 故障 → b4 gate → b5 警告。
 //          b1〜b3 が当たったら戻り値は `[.stop(理由)]` の **1 要素だけ**
-//      3c. b4 は gate 操作をちょうど 1 つ（`.ad` の連投は `.wait`、広告明けは `.rewindThenOpenGate`）
-//      3d. b5 の SSAI 警告は 1 セッション 1 回だけ。無音警告は **gate が開いている間だけ**で、
+//      3c. b4 は gate 操作をちょうど 1 つ（`.ad` の連投は `.wait`、広告明けは `.rewindThenOpenGate`）。
+//          広告明けの判定は **「`.ad` を見てから本編の `playing` をまだ見ていない」**であって
+//          「直前が `.ad`」ではない（間に `main loading` / `main paused` が挟まっても巻き戻す = E12）
+//      3d. b5 の警告は **自動再生拒否 → SSAI → 無音**の順。自動再生拒否（`playErr` が非 nil）と
+//          SSAI はそれぞれ 1 セッション 1 回だけ。無音警告は **gate が開いている間だけ**で、
 //          再送は `Tuning.silenceWarnIntervalSeconds` を**超えてから**（ちょうど 30.0 秒は出さない）
 //   4. 純粋な値型: 時刻は必ず引数 `now` から来る（内部で `Date()` を読まない）ので、
 //      同じ入力列を 2 つの `SessionPolicy` に流すと出力列は一致する。戻り値は空配列にならない
@@ -50,6 +53,9 @@ struct SessionPolicyTests {
     /// `startRecording(title:)` に渡るはずのタイトル。
     private static let videoTitle = "テスト動画"
 
+    /// `v.play()` の reject 名（`playErr`）。実機で最もよく出るのがこれ。
+    private static let autoplayErrorName = "NotAllowedError"
+
     // MARK: - ヘルパ
 
     /// セッション開始から `seconds` 秒後の時刻。
@@ -66,17 +72,20 @@ struct SessionPolicyTests {
     ///
     /// `durJSON` / `lenJSON` は**生の JSON トークン**で渡す（`213` / `"inf"` / `null` を
     /// 書き分けたいため。`dur` は数値と文字列の両方を受ける契約）。
+    /// `playErr` は `nil` なら JSON の `null`（= 自動再生は拒否されていない）。
     private func probe(_ kind: String,
                       _ state: String,
                       id: String = SessionPolicyTests.firstVideoID,
                       live: Bool = false,
                       title: String? = SessionPolicyTests.videoTitle,
                       durJSON: String = "213",
-                      lenJSON: String = "213") -> ProbeOutcome {
+                      lenJSON: String = "213",
+                      playErr: String? = nil) -> ProbeOutcome {
         let titleJSON = title.map { "\"\($0)\"" } ?? "null"
+        let playErrJSON = playErr.map { "\"\($0)\"" } ?? "null"
         let json = """
         {"kind":"\(kind)","state":"\(state)","id":"\(id)","cur":0,"dur":\(durJSON),\
-        "live":\(live),"title":\(titleJSON),"len":\(lenJSON),"playErr":null}
+        "live":\(live),"title":\(titleJSON),"len":\(lenJSON),"playErr":\(playErrJSON)}
         """
         return parseProbe(json)
     }
@@ -300,18 +309,18 @@ struct SessionPolicyTests {
         #expect(atDeadline == [.stop(.pageUnresponsive)], "2 回目の欠測列で停止しなかった: \(atDeadline)")
     }
 
-    @Test(".none は直前の kind を変えない（広告中の欠測から復帰したら .rewindThenOpenGate）")
+    @Test(".none は広告明けの記憶を消さない（広告中の欠測から復帰したら .rewindThenOpenGate）")
     func missingProbeKeepsPreviousKind() {
         var policy = makePolicy()
         #expect(policy.step(probe: probe("ad", "playing"), meter: meter(), now: at(1))
             == [.startRecording(title: Self.videoTitle), .closeGateDiscard])
 
-        // 欠測を挟んでも「直前は広告」の記憶は消えない。
+        // 欠測を挟んでも「広告を見た（巻き戻しが未消費）」の記憶は消えない。
         #expect(policy.step(probe: .none, meter: meter(), now: at(2)) == [.wait])
         #expect(policy.step(probe: .none, meter: meter(), now: at(3)) == [.wait])
 
         let actions = policy.step(probe: probe("main", "playing"), meter: meter(), now: at(4))
-        #expect(actions == [.rewindThenOpenGate], ".none が直前の kind を上書きした: \(actions)")
+        #expect(actions == [.rewindThenOpenGate], ".none が広告明けの記憶を消した: \(actions)")
     }
 
     // MARK: - 3b. b1 / b2 / b3（当たったら 1 要素だけ）
@@ -426,7 +435,7 @@ struct SessionPolicyTests {
         #expect(policy.step(probe: probe("ad", "paused"), meter: meter(), now: at(4)) == [.wait])
     }
 
-    @Test("広告明け（直前が .ad で main playing）→ [.rewindThenOpenGate]")
+    @Test("広告明け（ad の直後に main playing）→ [.rewindThenOpenGate]")
     func adToMainPlayingRewindsThenOpens() {
         var policy = makePolicy()
         #expect(policy.step(probe: probe("ad", "playing"), meter: meter(), now: at(1))
@@ -435,9 +444,121 @@ struct SessionPolicyTests {
         let actions = policy.step(probe: probe("main", "playing"), meter: meter(), now: at(2))
         #expect(actions == [.rewindThenOpenGate], "広告明けの巻き戻しが出ていない: \(actions)")
 
-        // 2 回目以降は通常の `.openGate`（直前が `.main` になっている）。
+        // 2 回目以降は通常の `.openGate`（巻き戻しが消費されている）。
         let again = policy.step(probe: probe("main", "playing"), meter: meter(), now: at(3))
-        #expect(again == [.openGate], "直前の kind が更新されていない: \(again)")
+        #expect(again == [.openGate], "広告明けの旗が消費されていない: \(again)")
+    }
+
+    /// F1 の E12。判定が「直前が `.ad`」だと、広告と本編再生の間に 1 回でも別の状態が
+    /// 挟まった瞬間に巻き戻しが落ちる。実機ではここに `main loading` が入るのが普通。
+    @Test("ad → main loading → main playing でも [.rewindThenOpenGate]")
+    func adThenLoadingThenMainPlayingRewinds() {
+        var policy = startedPolicy()
+        #expect(policy.step(probe: probe("ad", "playing"), meter: meter(), now: at(1)) == [.closeGateDiscard])
+        #expect(policy.step(probe: probe("main", "loading"), meter: meter(), now: at(2)) == [.wait])
+
+        let actions = policy.step(probe: probe("main", "playing"), meter: meter(), now: at(3))
+        #expect(actions == [.rewindThenOpenGate], "loading を挟んだら巻き戻しが落ちた: \(actions)")
+    }
+
+    @Test("ad → main paused → main playing でも [.rewindThenOpenGate]")
+    func adThenPausedThenMainPlayingRewinds() {
+        var policy = startedPolicy()
+        #expect(policy.step(probe: probe("ad", "playing"), meter: meter(), now: at(1)) == [.closeGateDiscard])
+        #expect(policy.step(probe: probe("main", "paused"), meter: meter(), now: at(2)) == [.closeGateHold])
+
+        let actions = policy.step(probe: probe("main", "playing"), meter: meter(), now: at(3))
+        #expect(actions == [.rewindThenOpenGate], "一時停止を挟んだら巻き戻しが落ちた: \(actions)")
+    }
+
+    @Test("ad → ad → main playing でも [.rewindThenOpenGate]（広告の連投を跨ぐ）")
+    func adRepeatedThenMainPlayingRewinds() {
+        var policy = startedPolicy()
+        #expect(policy.step(probe: probe("ad", "playing"), meter: meter(), now: at(1)) == [.closeGateDiscard])
+        #expect(policy.step(probe: probe("ad", "playing"), meter: meter(), now: at(2)) == [.wait])
+
+        let actions = policy.step(probe: probe("main", "playing"), meter: meter(), now: at(3))
+        #expect(actions == [.rewindThenOpenGate], "広告の連投のあと巻き戻さなかった: \(actions)")
+    }
+
+    @Test("rewindThenOpenGate を出したら旗は下りる（以降の main playing は .openGate）")
+    func rewindConsumesPendingAdResume() {
+        var policy = startedPolicy()
+        #expect(policy.step(probe: probe("ad", "playing"), meter: meter(), now: at(1)) == [.closeGateDiscard])
+        #expect(policy.step(probe: probe("main", "playing"), meter: meter(), now: at(2)) == [.rewindThenOpenGate])
+
+        // 旗を下ろすのは巻き戻しを出した 1 回だけ。一時停止や loading を挟んでも立ち直らない。
+        #expect(policy.step(probe: probe("main", "paused"), meter: meter(), now: at(3)) == [.closeGateHold])
+        #expect(policy.step(probe: probe("main", "loading"), meter: meter(), now: at(4)) == [.wait])
+
+        let actions = policy.step(probe: probe("main", "playing"), meter: meter(), now: at(5))
+        #expect(actions == [.openGate], "巻き戻しを出したのに旗が立ったままだった: \(actions)")
+    }
+
+    // MARK: - 3d-0. 自動再生拒否の警告（F1 の E10。1 セッション 1 回だけ）
+
+    @Test("playErr が非 nil なら警告列の先頭に .warn(autoplayRejected)（録音は継続）")
+    func autoplayRejectedWarnsOnce() {
+        var policy = startedPolicy()
+        let expected = SessionAction.warn(Messages.autoplayRejected(name: Self.autoplayErrorName))
+
+        let first = policy.step(probe: probe("main", "playing", playErr: Self.autoplayErrorName),
+                                meter: meter(),
+                                now: at(1))
+        #expect(first == [.openGate, expected], "自動再生拒否の警告が出ていない: \(first)")
+
+        // 同じ `playErr` が続いても警告は最初の 1 回だけ（録音は止めない）。
+        let second = policy.step(probe: probe("main", "playing", playErr: Self.autoplayErrorName),
+                                 meter: meter(),
+                                 now: at(2))
+        #expect(second == [.openGate], "自動再生拒否の警告が 2 回出た: \(second)")
+
+        let third = policy.step(probe: probe("main", "playing", playErr: Self.autoplayErrorName),
+                                meter: meter(),
+                                now: at(3))
+        #expect(third == [.openGate], "自動再生拒否の警告が 3 回目に出た: \(third)")
+    }
+
+    @Test("playErr が nil なら自動再生拒否の警告は出ない")
+    func autoplayRejectedStaysQuietWithoutPlayErr() {
+        var policy = startedPolicy()
+        let actions = policy.step(probe: probe("main", "playing"), meter: meter(), now: at(1))
+        #expect(actions == [.openGate], "playErr が nil なのに警告が出た: \(actions)")
+    }
+
+    @Test("警告が 3 つ同時に立つ場合は gate 操作 → 自動再生拒否 → SSAI → 無音 の順")
+    func autoplayWarningComesBeforeOtherWarnings() {
+        var policy = startedPolicy()
+        let length = 100.0
+        let longDur = "\(length * Tuning.ssaiDurationRatio + 1)"
+
+        let actions = policy.step(probe: probe("main", "playing",
+                                               durJSON: longDur,
+                                               lenJSON: "\(length)",
+                                               playErr: Self.autoplayErrorName),
+                                  meter: meter(silent: Tuning.silenceWarnAfterSeconds),
+                                  now: at(1))
+        #expect(actions == [.openGate,
+                            .warn(Messages.autoplayRejected(name: Self.autoplayErrorName)),
+                            .warn(Messages.ssaiWarning),
+                            .warn(Messages.silenceWarning)],
+                "警告の順序が違う: \(actions)")
+    }
+
+    @Test("b1〜b3 で停止する probe に playErr が付いていても警告は付かない（旗も立たない）")
+    func autoplayWarningIsNotAddedWhenStopping() {
+        var policy = startedPolicy()
+        let stopping = policy.step(probe: probe("main", "ended", playErr: Self.autoplayErrorName),
+                                   meter: meter(),
+                                   now: at(1))
+        #expect(stopping == [.stop(.ended)], "停止が 1 要素になっていない: \(stopping)")
+
+        // 旗も立っていないので、b4 に届く probe が来たらそこで初めて 1 回出る。
+        let later = policy.step(probe: probe("main", "playing", playErr: Self.autoplayErrorName),
+                                meter: meter(),
+                                now: at(2))
+        #expect(later == [.openGate, .warn(Messages.autoplayRejected(name: Self.autoplayErrorName))],
+                "停止した step で警告の旗が立っていた: \(later)")
     }
 
     @Test("main playing（直前も main）→ [.openGate]")
@@ -454,7 +575,7 @@ struct SessionPolicyTests {
         #expect(actions == [.closeGateHold], "一時停止で保持しなかった: \(actions)")
     }
 
-    @Test("main paused のあと main playing に戻ったら .openGate（直前が .main なので巻き戻さない）")
+    @Test("main paused のあと main playing に戻ったら .openGate（ad を見ていないので巻き戻さない）")
     func mainPausedThenPlayingOpensGateWithoutRewind() {
         var policy = startedPolicy()
         #expect(policy.step(probe: probe("main", "paused"), meter: meter(), now: at(1)) == [.closeGateHold])
@@ -713,5 +834,15 @@ struct SessionPolicyTests {
             return
         }
         #expect(live.live == true)
+
+        // `playErr` も生トークンで書き分けている（既定は `null` = 拒否されていない）。
+        guard case let .result(rejected) = probe("main", "playing", playErr: Self.autoplayErrorName),
+              case let .result(allowed) = probe("main", "playing")
+        else {
+            Issue.record("playErr のヘルパが .result にならない")
+            return
+        }
+        #expect(rejected.playErr == Self.autoplayErrorName)
+        #expect(allowed.playErr == nil)
     }
 }

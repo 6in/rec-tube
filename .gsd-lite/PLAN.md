@@ -741,7 +741,7 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
 | E18 | `-o x.wav`（`m4a` 以外の拡張子） | 1 | なし | usage エラー（拡張子は `m4a` のみ。無ければ付ける） |
 | E19 | `swift .gsd-lite/logs/rec-cli-hardening/scratch/turn-014-probe.swift`（堅牢性の格子の回帰） | — | 各行の exit が round 1 と同じ。`bogus-stderr-closed` が `exit=1`、`list-stdout-closedpipe` が `exit=0`、`TRACEBACK!` 0 件 | — |
 
-- [ ] F1: 停止理由・警告の出力、停止の順序、policy の訂正（要件の取りこぼし。VERIFICATION §4「要件の取りこぼし」）
+- [x] F1: 停止理由・警告の出力、停止の順序、policy の訂正（要件の取りこぼし。VERIFICATION §4「要件の取りこぼし」）
   - 完了基準:
     - `Messages.swift` に停止理由ごとの 1 行（`static func stopReason(_: StopReason) -> String`。15 case すべて。`default` を書かない）と
       保存先の 1 行（`static func savedTo(_ url: URL) -> String`）、自動再生拒否の 1 行（`autoplayRejected(name:)`）を足す。
@@ -775,8 +775,10 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
       **失敗は無視する**。`FileHandle.write(_:)` を使わない）。`RecordingSession` の既定 `onMessage`、`Sources/rec/main.swift` の catch、
       `Sources/rec-probe/main.swift` の stderr 出力をすべてこれに置き換える。`rg -n 'standardError\.write' Sources` が 0
     - `Sources/rec/main.swift` と `Sources/rec-probe/main.swift` の先頭で `signal(SIGPIPE, SIG_IGN)`（`--list` の `print` は失敗しても落ちない）（E13 / E14）
-    - `RecordingSession.fail()` は `finish` と同じ出力の後始末（`framesWritten == 0` → 削除 + `Messages.noData`。無音判定も同じ）を通す
-      （実装は `finish` と共通の private 関数に寄せる）（E15）
+    - ~~`RecordingSession.fail()` は `finish` と同じ出力の後始末（`framesWritten == 0` → 削除 + `Messages.noData`。無音判定も同じ）を通す
+      （実装は `finish` と共通の private 関数に寄せる）（E15）~~
+      → **F1 で先に実装済み**（turn 15。E15 のテストが F1 の完了基準にあり、実装が F2 だと F1 でテストが落ちるため）。
+      共通化先は `RecordingSession.emitOutcome(headline:reason:code:)`。F2 では**この項目に手を付けない**
     - `-o` の分解を `Sources/rec/main.swift` から `Sources/RecCore/CLI.swift` へ移す（`public func splitOutputPath(_ path: String) throws -> SessionOutput`）:
       空文字列は `.usage`（E16）、末尾 `/` または存在するディレクトリはそのディレクトリ + `explicitBaseName: nil`（E17）、拡張子が `m4a` 以外なら `.usage`、無ければ `m4a`（E18）。
       `CLITests` に E16 / E17 / E18 と `a.b.m4a`（base `a.b`）/ `dir/sub.m4a` を足す
@@ -891,12 +893,17 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
    | `RecorderEvent`（セッションが直接 coordinator へ） | `.defaultOutputChanged → .deviceChanged`, `.ioStoppedAbnormally → .ioStopped`, `.deviceDied → .deviceDied`, `.serviceRestarted → .serviceRestarted`, `.overload` はログのみ |
    | スリープ / シグナル / write エラー | `.sleep` / `.signal(sig)` / `.writeFailed` |
 
-   **verify round 1 の訂正（turn 14。F1 が実装する）**:
+   **verify round 1 の訂正（turn 14。F1 が turn 15 で実装済み）**:
    - 行を 1 つ足す: 「probe の `playErr` が非 nil（未警告） → `warn(自動再生が拒否された: <playErr>)`。1 セッションに 1 回」（b5 の警告列の先頭）
    - 「`kind == main && state == playing`（直前が ad）」の「直前」は **probe 1 回前ではなく「ad を見てから `main playing` をまだ見ていない」**
      （間に `main loading` / `main paused` / `ad` が何回挟まっても `rewindThenOpenGate`）。根拠: 広告明けの再バッファで `loading` が 1 回挟まるだけで
      巻き戻しが消え、広告開始で捨てた約 1 秒が戻らない（境界の欠落が許容 1 秒を超える）
    - 停止理由はどれも stderr に 1 行出す（表の行動には書いていなかったが、受け入れ基準「原因が分かるメッセージ」の対象）
+
+   **実装のメモ（turn 15）**: `SessionPolicy` は記憶を 2 つ持つ。`.main playing` の巻き戻し判定は
+   `pendingAdResume`（`.ad` で立て、`rewindThenOpenGate` を出したら下ろす）、`.ad`（直前も ad なら `wait`）の判定は
+   従来どおり `lastKind`。旗の更新は b4 の後なので、b1〜b3 で停止した step では旗も警告も動かない。
+   警告列の順序は **自動再生拒否 → SSAI → 無音**。
 
 11. **タブの後始末**: 自分で開いたウィンドウのタブを閉じるのは `.ended` / `.nextVideo` / `.liveStream` のとき。シグナル・エラー・中断では閉じない（現行動作 rec.swift:252 を維持）
 12. **ローカル検証ページ**（`Tests/Fixtures/adtest.html`）: `<div id="movie_player"><video id="v" src="main.wav"></video></div>`。進行: 本編 0→4 秒 → 広告 4 秒

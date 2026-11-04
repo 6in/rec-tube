@@ -9,6 +9,12 @@
 //   - `step` は **throw しない**。戻り値は**空配列にしない**（該当が無ければ `[.wait]`）
 //   - `startRecording` は 1 セッションでちょうど 1 回。`stop` を返したあとに呼ばれても
 //     この型は何も覚えない（止めるのは `StopCoordinator` の仕事。最初の 1 本だけが効く）
+//   - **1 回だけの警告は旗で止める**。自動再生拒否（`didWarnAutoplayRejected`）と
+//     SSAI（`didWarnSSAI`）はどちらも 1 セッションに 1 回。b5 の警告列の順序は
+//     **自動再生拒否 → SSAI → 無音**で固定（F1 の E10）
+//   - **広告明けの巻き戻しは `lastKind` では判定しない**。`.ad` を見てから本編の `playing` を
+//     まだ見ていない間だけ立つ旗（`pendingAdResume`）で判定する。`ad` → `main loading` →
+//     `main playing` のように間に別の状態が挟まっても巻き戻しは落ちない（F1 の E12）
 //
 // 境界（テストが固定する値。`>` と `>=` の違いが仕様）:
 //   - 録音開始の待ち: **ちょうど `Tuning.startTimeoutSeconds` は `.wait`**（`>`）
@@ -43,7 +49,20 @@ public struct SessionPolicy: Sendable {
     private var firstID: String?
 
     /// 直前の `.result` の `kind`。`.none`（欠測）では更新しない（`.none` は kind を持たない）。
+    ///
+    /// 用途は b4 の「広告が続いている間は閉じ直さない」判定だけ。広告明けの巻き戻しは
+    /// `pendingAdResume` を見る（`lastKind` ではもう判定しない）。
     private var lastKind: ProbeKind?
+
+    /// 「`.ad` を見たが、本編の `playing` をまだ見ていない」= 広告明けの巻き戻しが未消費か。
+    ///
+    /// `lastKind == .ad` で判定しない理由（F1 の E12）: `ad` → `main loading` → `main playing` や
+    /// `ad` → `main paused` → `main playing` のように広告と本編再生の間に 1 回でも別の状態が
+    /// 挟まると `lastKind` が `.ad` でなくなり、巻き戻し（決めた事項 #4）が落ちてしまう。
+    ///
+    /// 立つのは `.ad` の probe が b4 に到達したときだけ、下りるのは `.rewindThenOpenGate` を
+    /// 出した 1 回だけ（`main loading` / `main paused` では下ろさない）。
+    private var pendingAdResume = false
 
     /// 録音開始後、連続欠測が始まった時刻（欠測していなければ `nil`）。
     private var missingSince: Date?
@@ -52,6 +71,9 @@ public struct SessionPolicy: Sendable {
     /// `.closeGateDiscard` / `.closeGateHold` を出したら閉）。初期値は閉。
     /// 無音警告はこの内部状態を見る。
     private var gateOpen = false
+
+    /// 自動再生拒否の警告を出したか（1 セッションに 1 回だけ）。
+    private var didWarnAutoplayRejected = false
 
     /// SSAI 警告を出したか（1 セッションに 1 回だけ）。
     private var didWarnSSAI = false
@@ -150,7 +172,8 @@ public struct SessionPolicy: Sendable {
     /// B2: 完全な状態が取れたときの判定。順序がそのまま仕様。
     ///
     /// b1〜b3（停止）のいずれかが当たったら**返すのは `[.stop(理由)]` の 1 要素だけ**で、
-    /// gate の操作も警告も付けない（内部状態も更新しない）。
+    /// gate の操作も警告も付けない（内部状態も更新しない）。旗（`pendingAdResume` /
+    /// `didWarnAutoplayRejected` / `didWarnSSAI`）が動くのも b4 以降に到達したときだけ。
     private mutating func apply(_ result: ProbeResult, meter: MeterSnapshot, now: Date) -> [SessionAction] {
         // 応答が戻ったので連続欠測は切れる。
         missingSince = nil
@@ -170,11 +193,16 @@ public struct SessionPolicy: Sendable {
         }
 
         // b4: gate の操作をちょうど 1 つ決める。
+        // `gateActionFor` は純粋（旗を読むだけ）で、旗の更新は下の 2 本の `mutating` に閉じる。
         let gateAction = gateActionFor(result)
         updateGateState(after: gateAction)
+        updateAdResumeState(after: gateAction, for: result)
         var actions: [SessionAction] = [gateAction]
 
-        // b5: 警告をこの順で足す（SSAI → 無音）。
+        // b5: 警告をこの順で足す（自動再生拒否 → SSAI → 無音）。順序そのものが仕様。
+        if let autoplay = autoplayWarning(for: result) {
+            actions.append(autoplay)
+        }
         if let ssai = ssaiWarning(for: result) {
             actions.append(ssai)
         }
@@ -187,11 +215,19 @@ public struct SessionPolicy: Sendable {
         return actions
     }
 
-    /// b4 の表。`.main playing` だけが直前の kind を見る（広告明けの巻き戻し。決めた事項 #4）。
+    /// b4 の表。**純粋**（旗を読むだけで書き換えない。更新は `updateGateState` /
+    /// `updateAdResumeState` の 2 本に閉じる）。
+    ///
+    /// 2 つの行だけが過去を見る。見るものは別物なので取り違えない:
+    ///   - `.main playing`: **`pendingAdResume`**（`.ad` を見てから本編再生をまだ見ていないか）を見る。
+    ///     立っていれば広告明けなので `.rewindThenOpenGate`、そうでなければ `.openGate`
+    ///     （決めた事項 #4。`lastKind` ではないので間に `main loading` / `main paused` が
+    ///     挟まっても巻き戻しは落ちない = F1 の E12）
+    ///   - `.ad`: **`lastKind`** を見る（広告が続いている間は閉じ直さない。捨てるのは 1 回だけ）
     private func gateActionFor(_ result: ProbeResult) -> SessionAction {
         switch (result.kind, result.state) {
         case (.main, .playing):
-            return lastKind == .ad ? .rewindThenOpenGate : .openGate
+            return pendingAdResume ? .rewindThenOpenGate : .openGate
         case (.main, .paused):
             return .closeGateHold
         case (.ad, _):
@@ -214,6 +250,35 @@ public struct SessionPolicy: Sendable {
             // `.wait` は gate を動かさない。
             break
         }
+    }
+
+    /// b4 で出した指示と今回の probe にあわせて「広告明け待ち」の旗を進める（F1 の E12）。
+    ///
+    /// 下ろすのは `.rewindThenOpenGate` を出した 1 回だけ（巻き戻しを消費した）。
+    /// 立てるのは `.ad` の probe を見たとき。`.ad` の probe で出る指示は `.wait` か
+    /// `.closeGateDiscard` だけなので、この 2 つが同じ呼び出しでぶつかることはない。
+    ///
+    /// **b1〜b3 で停止したときはここに来ない**（`apply` が先に return する）ので旗は動かない。
+    private mutating func updateAdResumeState(after action: SessionAction, for result: ProbeResult) {
+        if action == .rewindThenOpenGate {
+            pendingAdResume = false
+        }
+        if result.kind == .ad {
+            pendingAdResume = true
+        }
+    }
+
+    /// 自動再生拒否の警告（F1 の E10）。1 セッションに 1 回だけ。
+    ///
+    /// **録音は止めない**（#10 の表に停止の行は無い。ユーザーに「タブで再生ボタンを押せ」と
+    /// 伝えるだけ）。`playErr` の中身は見ない: 非 nil なら出す（空文字列の特別扱いもしない）のが
+    /// 契約で、`name` が取れない場合に JS 側が `PlayError` を入れてくれる。
+    private mutating func autoplayWarning(for result: ProbeResult) -> SessionAction? {
+        guard !didWarnAutoplayRejected, let playErr = result.playErr else {
+            return nil
+        }
+        didWarnAutoplayRejected = true
+        return .warn(Messages.autoplayRejected(name: playErr))
     }
 
     /// SSAI 警告（決めた事項 #8）。1 セッションに 1 回だけ。
