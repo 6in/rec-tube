@@ -1,15 +1,15 @@
-// rec.swift — macOS 14.2+ 音声録音 CLI（Core Audio Process Tap）
+// Legacy.swift — 単一ファイル版（移動元は `git show main:rec.swift`）から移した暫定コード。
 //
-// build:
-//   swiftc -O rec.swift -o rec \
-//     -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker Info.plist
+// T3〜T9 で RecCore の各型（ExitCode / TapRecorder / ChromeController / SessionPolicy …）に
+// 置き換えて、このファイルは消える。Swift 6 言語モードのエラーは、このファイル内だけ
+// `nonisolated(unsafe)` / `@unchecked Sendable` で黙らせている（言語モードは落とさない）。
 //
-// usage:
-//   ./rec --url 'https://www.youtube.com/watch?v=XXXX'   # Chromeで開いて本編だけ録音、終了で自動停止
-//   ./rec                          # システム全体の音を録音（Ctrl-C で停止）
-//   ./rec --app com.google.Chrome  # バンドルID前方一致のプロセスだけ録音
-//   ./rec --list                   # 音声を扱っているプロセス一覧
-//   -o out.m4a                     # 出力先（既定: rec-日時.m4a）
+// usage（T9 で CLI.swift の usage 文字列に移す）:
+//   rec --url 'https://www.youtube.com/watch?v=XXXX'   # Chromeで開いて本編だけ録音、終了で自動停止
+//   rec                          # システム全体の音を録音（Ctrl-C で停止）
+//   rec --app com.google.Chrome  # バンドルID前方一致のプロセスだけ録音
+//   rec --list                   # 音声を扱っているプロセス一覧
+//   -o out.m4a                   # 出力先（既定: rec-日時.m4a）
 //
 // --url には Chrome の「表示 > 開発/管理 > Apple Events からの JavaScript を許可」が必要。
 
@@ -17,7 +17,13 @@ import AVFoundation
 import CoreAudio
 import Foundation
 
-struct RecError: Error, CustomStringConvertible { let description: String }
+public struct RecError: Error, CustomStringConvertible {
+    public let description: String
+
+    public init(description: String) {
+        self.description = description
+    }
+}
 
 func check(_ st: OSStatus, _ what: String) throws {
     if st != noErr { throw RecError(description: "\(what) failed (OSStatus \(st))") }
@@ -46,9 +52,13 @@ func readIDs(_ id: AudioObjectID, _ sel: AudioObjectPropertySelector) throws -> 
     return ids
 }
 
-struct AudioProc { let id: AudioObjectID; let bundle: String; let running: Bool }
+public struct AudioProc {
+    public let id: AudioObjectID
+    public let bundle: String
+    public let running: Bool
+}
 
-func audioProcesses() throws -> [AudioProc] {
+public func audioProcesses() throws -> [AudioProc] {
     try readIDs(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyProcessObjectList).map {
         let bundle = ((try? read($0, kAudioProcessPropertyBundleID, "" as CFString)) as String?) ?? ""
         let running = ((try? read($0, kAudioProcessPropertyIsRunningOutput, UInt32(0))) ?? 0) != 0
@@ -58,7 +68,9 @@ func audioProcesses() throws -> [AudioProc] {
 
 // MARK: - Recorder
 
-final class Recorder {
+/// `@unchecked Sendable`: 可変状態（`writing` / `file`）は `queue` 上でだけ触る規約。
+/// T5 の `TapRecorder` で、この規約をリスナー対応つきで作り直す。
+public final class Recorder: @unchecked Sendable {
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
@@ -66,10 +78,10 @@ final class Recorder {
     private let queue = DispatchQueue(label: "rec.io")
     private var writing: Bool
     private var stopped = false
-    let format: AVAudioFormat
+    public let format: AVAudioFormat
 
     /// targets == nil ならシステム全体
-    init(targets: [AudioObjectID]?, path: String, writing: Bool = true) throws {
+    public init(targets: [AudioObjectID]?, path: String, writing: Bool = true) throws {
         self.writing = writing
         let desc = targets.map { CATapDescription(stereoMixdownOfProcesses: $0) }
             ?? CATapDescription(stereoGlobalTapButExcludeProcesses: [])
@@ -113,16 +125,16 @@ final class Recorder {
 
         try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggID, queue) { [unowned self] _, input, _, _, _ in
             guard self.writing,
-                  let buf = AVAudioPCMBuffer(pcmFormat: fmt, bufferListNoCopy: input, deallocator: nil)
+                  let buf = AVAudioPCMBuffer(pcmFormat: self.format, bufferListNoCopy: input, deallocator: nil)
             else { return }
             try? self.file?.write(from: buf)
         }, "create IOProc")
         try check(AudioDeviceStart(aggID, procID), "start device")
     }
 
-    func setWriting(_ on: Bool) { queue.async { self.writing = on } }
+    public func setWriting(_ on: Bool) { queue.async { self.writing = on } }
 
-    func stop() {
+    public func stop() {
         guard !stopped else { return }
         stopped = true
         AudioDeviceStop(aggID, procID)
@@ -170,6 +182,7 @@ func chromeOpen(_ url: String) -> String? {
     """)
 }
 
+@discardableResult
 func chromeTab(_ tabID: String, _ body: String) -> String? {
     osa("""
     tell application "Google Chrome"
@@ -195,13 +208,14 @@ return (ad?'ad':'main')+' '+(v.ended?'ended':(v.paused?'paused':'playing'))+' '+
 +v.currentTime.toFixed(1)+' '+(isFinite(v.duration)?v.duration.toFixed(1):'0');})()
 """
 
+@discardableResult
 func chromeJS(_ tabID: String, _ js: String) -> String? {
     chromeTab(tabID, "return execute t javascript \"\(js)\"")
 }
 
 // MARK: - modes
 
-func recordURL(_ url: String, path: String) throws {
+public func recordURL(_ url: String, path: String) throws {
     guard let tab = chromeOpen(url) else { throw RecError(description: "Chrome を開けませんでした") }
     print("Chrome で開きました。再生待ち…")
 
@@ -253,61 +267,19 @@ func recordURL(_ url: String, path: String) throws {
     print("保存しました: \(path)")
 }
 
-func recordLive(targets: [AudioObjectID]?, path: String) throws -> Never {
+public func recordLive(targets: [AudioObjectID]?, path: String) throws -> Never {
     let rec = try Recorder(targets: targets, path: path)
     print("録音中: \(path)  (\(Int(rec.format.sampleRate))Hz/\(rec.format.channelCount)ch)  Ctrl-C で停止")
     installSigint { rec.stop(); print("\n保存しました: \(path)") }
     dispatchMain()
 }
 
-var sigSource: DispatchSourceSignal?
-func installSigint(_ handler: @escaping () -> Void) {
+nonisolated(unsafe) var sigSource: DispatchSourceSignal?
+
+public func installSigint(_ handler: @escaping @Sendable () -> Void) {
     signal(SIGINT, SIG_IGN)
     let s = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
     s.setEventHandler { handler(); exit(0) }
     s.resume()
     sigSource = s
-}
-
-// MARK: - main
-
-var app: String?
-var url: String?
-var outPath: String?
-var it = CommandLine.arguments.dropFirst().makeIterator()
-while let a = it.next() {
-    switch a {
-    case "--app": app = it.next()
-    case "--url": url = it.next()
-    case "-o": outPath = it.next()
-    case "--list":
-        for p in try audioProcesses() where !p.bundle.isEmpty {
-            print("\(p.running ? "▶" : " ") \(p.bundle)")
-        }
-        exit(0)
-    default:
-        FileHandle.standardError.write("unknown arg: \(a)\n".data(using: .utf8)!)
-        exit(1)
-    }
-}
-let path: String = outPath ?? {
-    let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"
-    return "rec-\(f.string(from: Date())).m4a"
-}()
-
-do {
-    if let url {
-        try recordURL(url, path: path)
-    } else if let app {
-        let targets = try audioProcesses().filter { $0.bundle.hasPrefix(app) }.map(\.id)
-        guard !targets.isEmpty else {
-            throw RecError(description: "'\(app)' に一致する音声プロセスがありません。再生後に --list で確認してください。")
-        }
-        try recordLive(targets: targets, path: path)
-    } else {
-        try recordLive(targets: nil, path: path)
-    }
-} catch {
-    print("error: \(error)")
-    exit(1)
 }

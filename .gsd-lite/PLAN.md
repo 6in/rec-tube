@@ -13,6 +13,22 @@ scripts/build.sh                 # DEVELOPER_DIR=/Applications/Xcode.app/Content
 scripts/test.sh                  # 同じ DEVELOPER_DIR で swift test（引数は swift test にそのまま渡す。例: scripts/test.sh --filter DelayLine）
 ```
 
+**PLAN 訂正（turn 3 / T1 の実測）**: 無人ターンから `scripts/*.sh` は実行できない（`Bash(scripts/:*)` /
+`Bash(bash scripts/:*)` の prefix ルールは「完全一致」か「prefix + 空白」でしか当たらず、`scripts/build.sh` という
+形に当たらない。`bash` 単体も allowlist に無い）。**無人ターン（impl / verify）は等価な素のコマンドを使う**:
+
+```bash
+swift build                      # = scripts/build.sh（DEVELOPER_DIR は .claude/settings.json の env で設定済み）
+swift build -c release           # = scripts/build.sh -c release
+swift test                       # = scripts/test.sh
+swift test --filter <name>       # = scripts/test.sh --filter <name>
+```
+
+scripts 側は人間と README 向けに残す（中身は上と同じ）。無人ターンから scripts を直に回したい場合は
+`.claude/settings.json` の allow に `Bash(scripts/build.sh:*)` / `Bash(scripts/test.sh:*)` /
+`Bash(scripts/final-check.sh:*)`（verify スクリプトも 1 本ずつ）を**完全なファイル名で**足す必要がある。
+`final-check.sh` の中身は turn 3 で 1 ステップずつ素のコマンドで実行して全て green を確認した
+
 - 環境の初期化（テストの前に毎回）: なし（`scripts/final-check.sh` だけが `.build` を消して回す）
 - 最終判定（クリーンな状態から全検査。verify と T11 が使う）: `scripts/final-check.sh`
   （`rm -rf .build` → `swift build` debug と `-c release` → `otool -s __TEXT __info_plist` / `otool -P` で
@@ -45,7 +61,7 @@ scripts/test.sh                  # 同じ DEVELOPER_DIR で swift test（引数�
 
 ## Tasks
 
-- [ ] T1: SwiftPM 雛形・ビルド/テストスクリプト・Info.plist 埋め込み（rec.swift を Sources へ移す）
+- [x] T1: SwiftPM 雛形・ビルド/テストスクリプト・Info.plist 埋め込み（rec.swift を Sources へ移す）
   - 完了基準:
     - `Package.swift`（swift-tools-version 6.0 以上、`platforms: [.macOS(.v26)]`、ダメなら `.macOS("26.0")`、
       `swiftLanguageModes: [.v6]`）。target は `RecCore`（library, `Sources/RecCore`）、`rec`（executableTarget,
