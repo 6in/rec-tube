@@ -726,3 +726,4 @@
   消したいなら `rm -rf .build` は allowlist にある）。
   (5) 無人ターンのシェルで通った形: `swift test --filter '<正規表現>'`、`swift build --build-tests --scratch-path …`、
   `grep -rnE '…' <path> | grep -c .`、`cat >> <file> << 'EOF'`（ヒアドキュメント）、`date -Iseconds`
+- 承認待ち（ループ計測・turn 19）: 1 件 — Bash: gsd-lite-loop.sh
