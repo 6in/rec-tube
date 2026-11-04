@@ -18,12 +18,12 @@
     "name": "",
     "path": "."
   },
-  "milestone": "",
-  "phase": "discuss",
-  "next_command": "DISCUSS",
+  "milestone": "rec-cli-hardening",
+  "phase": "research",
+  "next_command": "/gsd-lite-research",
   "branch": {
-    "name": "",
-    "base": ""
+    "name": "gsd-lite/rec-cli-hardening",
+    "base": "main"
   },
   "research": {
     "targets": [
@@ -47,5 +47,5 @@
     "verify": "claude-fable-5-1",
     "reflect": "claude-fable-5-1"
   },
-  "updated_at": "2026-11-04T13:46:55+09:00"
+  "updated_at": "2026-11-04T17:57:47+09:00"
 }
