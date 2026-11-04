@@ -621,3 +621,49 @@
   今回の変更は `NSLock` と `Tuning` 移動だけで挙動は変えていない。
   (5) E19 の格子は `url-space` / `url-newline` が各 62.5 秒、tap を張る 3 行が各 10 秒かかるので
   **1 回 2.5 分**。verify で回すときは `run_in_background` か長い timeout を見ておくこと
+
+## turn 17 — impl — F3 文書とスクリプトの整合、履歴参照の訂正、final-check の検査強化
+
+- やったこと: PLAN F3 の完了基準を上から順に全部やった。`git show main:rec.swift` →
+  `45301d8:rec.swift`（9 ファイル 10 箇所 + README + final-check の fail 文言 + PLAN 自身の 3 箇所）、
+  `verify-permission.sh` が自分でトーンを鳴らす形に、`verify-adtest.sh` の自動再生拒否の判定を
+  stderr の 1 行に、`verify-helper-restart.sh` の pkill を絞る、`http.server` に `--bind 127.0.0.1`、
+  `final-check.sh` の除外グロブと数値正規表現の修正 + 検査 2 本追加、README の `-o` / 既知の制約 3 行 /
+  許可 1 行、`SignalWatcher` のローカルパス削除、決めた事項 #2 の訂正。
+  `swift build` / `swift test` **220 本 green**、`scripts/*.sh` 9 本すべて `bash -n` exit 0、
+  final-check の追従チェック節の写しが ALL OK
+- 想定外: (1) **`git show main:rec.swift` は最初から誤り**だった。`rec.swift` は main に一度も入って
+  いない（`git log --diff-filter=A -- rec.swift` → `45301d8` = discuss のコミットで追加）。
+  T1 以降ずっとこの参照を書き足していたので 10 箇所に増えていた。
+  (2) **`verify-permission.sh` の段 1 は、何も鳴っていない状態では必ず落ちる形だった**。
+  `rec-probe tap system 2` は全編ゼロで exit 4 を返すのに、スクリプトが exit 4 を一律 `fail` に
+  していた。PLAN の「exit 4 と exit 8 を読み分ける」はここを指していた（段 1 の目的は
+  「開始できるか」だけなので exit 4 は正常）。
+  (3) **自動再生拒否は exit 6 では拾えない**。F1 で `Messages.autoplayRejected` を出して
+  **録音を続ける**形にしたので、本編が始まらないまま `main paused` を見続け、スクリプトの
+  上限 180 秒で打ち切られて exit 143 になる。判定を stderr の行だけに変えた。
+  (4) `rg` の除外グロブは**パス全体**に当たる（PLAN の実測を再確認）。`-g '!rec-probe/**'` では
+  `Sources/rec-probe/` を除外できず（`rg -c 440 Sources -g '!rec-probe/**'` → 6 行）、
+  `-g '!Sources/rec-probe/**'` なら 0 行。スラッシュの無い `!Tuning.swift` はベース名照合で効く。
+  (5) `afplay` の後始末は 2 段必要（ループ本体への `kill -TERM` だけでは起動済みの子 `afplay` が残る →
+  `pkill -f "afplay $TONE"`）
+- やり直し: 0 回
+- 次への注意: (1) **PLAN の全タスクが完了**（T1〜T11 + F1〜F3）。`phase: "verify"` /
+  `next_command: "/gsd-lite-verify"` にした。verify_round は 1 のまま（round 2 に入る）。
+  (2) **PLAN 訂正: F3 は並列サブ作業に分けず親が全部やった**。README と scripts が
+  `final-check.sh` の追従チェックで直接噛み合う（verify スクリプトの本数 == README の一覧行数、
+  ExitCode の case 数 == README の表の行数）ので、独立に書かせると一致の保証が統合時にしか取れない。
+  コード変更も Swift のコメント 10 箇所だけで並列の利得が無かった。
+  (3) **PLAN 追記: `final-check.sh` に検査を 2 本足した**（完了基準に無い）。調整値リテラルの
+  自己テスト（`Tuning.swift` で 5 行以上拾えること。正規表現が壊れて 0 件になったときに
+  「違反なし」で通るのを防ぐ）と `rg -n 'standardError\.write' Sources` が 0（F2 の E19 の不変条件）。
+  (4) **期待値を変えた既存テストは 0 件**（F3 はテストに触っていない。220 本のまま）。
+  (5) **実機未検証のまま verify に渡る**: `verify-permission.sh` の段 2（afplay + 録音）と
+  `verify-adtest.sh` / `verify-youtube.sh` / `verify-helper-restart.sh` はシステム音声の取得の許可が
+  必要（メモの【verify 前に必要な人の操作】）。`afplay`（`/usr/bin/afplay`）と
+  `Tests/Fixtures/main.wav`（440 Hz・12 秒）の存在は確認済み。`pkill` の新しいパターンが
+  実機の Chrome 音声ヘルパー 1 件に当たることも `pgrep -lf` で確認済み。
+  (6) **`scripts/final-check.sh` は無人ターンから直に回せない**（allowlist に当たらない。PLAN turn 3）。
+  今回は追従チェック節を `.gsd-lite/logs/rec-cli-hardening/scratch/turn-017-followup-check.sh` に
+  写して `turn-017-syntax.swift` 経由で回した。**写しなので final-check.sh を直したら写しも直す**
+  （verify が節を足すなら、ユーザーに `Bash(scripts/final-check.sh:*)` の追加を頼むのが本筋）
