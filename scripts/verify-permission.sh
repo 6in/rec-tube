@@ -4,10 +4,17 @@
 #   段 1（開始できるか）: swift run rec-probe tap system 2
 #       許可が無いとダイアログも出ないまま `AudioDeviceCreateIOProcIDWithBlock` が
 #       無期限にブロックし、10 秒の watchdog（Tuning.tapStartTimeoutSeconds）で exit 8 になる
-#       （T2 turn 4 / T9 turn 11 / T10 turn 12 の実測）。exit 8 なら許可なしと断定する。
-#   段 2（全ゼロでないか）: .build/debug/rec -o <scratch>/permission-<日時>.m4a を 2 秒だけ回して
+#       （T2 turn 4 / T9 turn 11 / T10 turn 12 の実測）。
+#       **exit 4（全編ゼロ）と exit 8（許可なし）は読み分ける**: 段 1 の時点ではまだ何も鳴らして
+#       いないので、exit 4 は「開始はできた（= 許可はある）が音が無かった」で**正常**。
+#       許可なしと断定するのは exit 8 だけ。
+#   段 2（全ゼロでないか）: **このスクリプトが自分でトーンを鳴らす**。
+#       Tests/Fixtures/main.wav（440 Hz・12 秒。無ければ `swift run rec-probe tones Tests/Fixtures`
+#       で作る）を afplay でバックグラウンド再生し続けながら
+#       .build/debug/rec -o <scratch>/permission-<日時>.m4a を 2 秒だけ回して
 #       kill -INT（期待 130）→ swift run rec-probe analyze <出力> --silence
 #       （--silence は全ゼロなら exit 1 / 音が入っていれば exit 0）。
+#       鳴っているはずの音が入らなければ tap が機能していないと言える（人が再生を用意しなくてよい）。
 #
 # timeout(1) には依存しない。上限は sleep + kill + wait で作る（verify-adtest.sh と同じ形）。
 # 出力は .gsd-lite/logs/rec-cli-hardening/scratch/ 配下（日時スタンプ付きで使い回さない）。
@@ -28,13 +35,29 @@ PROBE_LOG="$SCRATCH/permission-$STAMP.probe.log"
 REC_ERR="$SCRATCH/permission-$STAMP.rec-stderr.log"
 ANALYZE_ERR="$SCRATCH/permission-$STAMP.analyze-stderr.log"
 TIMEOUT_MARKER="$SCRATCH/permission-$STAMP.timeout"
+TONE="Tests/Fixtures/main.wav"
 REC_SECONDS=2
 # SIGINT が効かなかったときの上限（段 1 を通っていれば 2 秒で止まるはずの録音）。
 REC_LIMIT=20
 
 mkdir -p "$SCRATCH"
 
-trap 'printf "\n== 使ったファイル ==\n  録音          : %s\n  probe ログ    : %s\n  rec stderr    : %s\n  analyze stderr: %s\n" "$OUT" "$PROBE_LOG" "$REC_ERR" "$ANALYZE_ERR"' EXIT
+# 鳴らしているトーンのループの PID。cleanup が落とす（録音が何秒かかっても鳴り続けるように
+# afplay を while で回すので、ループ本体とその子の afplay の両方を止める）。
+tone_pid=""
+
+cleanup() {
+	if [ -n "$tone_pid" ]; then
+		kill -TERM "$tone_pid" 2>/dev/null || true
+		wait "$tone_pid" 2>/dev/null || true
+		# ループが起動済みの afplay は親を殺しても残るので名指しで落とす。
+		pkill -f "afplay $TONE" 2>/dev/null || true
+		tone_pid=""
+	fi
+	printf "\n== 使ったファイル ==\n  録音          : %s\n  probe ログ    : %s\n  rec stderr    : %s\n  analyze stderr: %s\n" \
+		"$OUT" "$PROBE_LOG" "$REC_ERR" "$ANALYZE_ERR"
+}
+trap cleanup EXIT
 
 fail() {
 	echo "FAIL: $1" >&2
@@ -73,13 +96,42 @@ if [ "$probe_code" -eq 8 ]; then
 	permission_help
 	exit 1
 fi
-if [ "$probe_code" -ne 0 ]; then
-	fail "rec-probe tap が exit $probe_code で終わった（4 = 全編ゼロ / 1 = 引数不正。ログ: $PROBE_LOG）"
+if [ "$probe_code" -eq 4 ]; then
+	# 段 1 ではまだトーンを鳴らしていないので、全編ゼロは想定どおり。
+	# 「tap を作って回せた」= 許可はある、という段 1 の目的は達している（音の有無は段 2 で見る）。
+	echo "  段 1 OK: tap を作れて 2 秒回せた（exit 4 = この時点では無音。音の有無は段 2 で見る）"
+elif [ "$probe_code" -ne 0 ]; then
+	fail "rec-probe tap が exit $probe_code で終わった（1 = 引数不正。ログ: $PROBE_LOG）"
+else
+	echo "  段 1 OK: tap を作れて音が入った"
 fi
-echo "  段 1 OK: tap を作れて音が入った"
 
-echo "== 段 2: 全ゼロでないか（$REC_SECONDS 秒録って analyze --silence）=="
+echo "== 段 2: 全ゼロでないか（トーンを鳴らしながら $REC_SECONDS 秒録って analyze --silence）=="
 echo "  out: $OUT"
+
+# 素材を用意する（*.wav は .gitignore 済みなので clone 直後には無い）。
+if [ ! -f "$TONE" ]; then
+	echo "  $TONE が無いので作る（swift run rec-probe tones Tests/Fixtures）"
+	swift run rec-probe tones Tests/Fixtures || fail "rec-probe tones が失敗した（$TONE を作れない）"
+fi
+[ -f "$TONE" ] || fail "rec-probe tones の後も $TONE が無い"
+
+# 録音が何秒かかってもトーンが途切れないように afplay を回し続ける（main.wav は 12 秒）。
+echo "  トーン: afplay $TONE をバックグラウンドで繰り返し再生する"
+(
+	while :; do
+		afplay "$TONE" || exit 0
+	done
+) &
+tone_pid=$!
+# 最初の afplay が実際に鳴り出すまで少し待つ（録音の先頭が無音にならないように）。
+sleep 1
+# afplay 自体が動かない環境（出力デバイスが無いなど）だとループが即終わる。
+# これを見ずに進むと「鳴らしていたのに全ゼロ」と誤診するので、ここで切り分ける。
+if ! kill -0 "$tone_pid" 2>/dev/null; then
+	tone_pid=""
+	fail "afplay $TONE が鳴らせなかった（出力デバイス・音量を確かめる）。段 2 の判定ができない"
+fi
 
 .build/debug/rec -o "$OUT" 2>"$REC_ERR" &
 rec_pid=$!
@@ -103,6 +155,14 @@ wait "$rec_pid" || rec_code=$?
 kill -TERM "$killer_pid" 2>/dev/null || true
 wait "$killer_pid" 2>/dev/null || true
 
+# 録音が終わったらトーンも止める（analyze の間に鳴らし続ける必要はない）。
+if [ -n "$tone_pid" ]; then
+	kill -TERM "$tone_pid" 2>/dev/null || true
+	wait "$tone_pid" 2>/dev/null || true
+	pkill -f "afplay $TONE" 2>/dev/null || true
+	tone_pid=""
+fi
+
 echo "  rec exit: $rec_code（期待 130 = 128 + SIGINT）"
 if [ -f "$TIMEOUT_MARKER" ]; then
 	echo "  （SIGINT が効かず $REC_LIMIT 秒で SIGTERM に落とした）"
@@ -125,8 +185,10 @@ swift run rec-probe analyze "$OUT" --silence 2>"$ANALYZE_ERR" || analyze_code=$?
 echo "  analyze --silence exit: $analyze_code（0 = 音が入っている / 1 = 全ゼロ）"
 
 if [ "$analyze_code" -eq 1 ]; then
-	echo "FAIL: 録音が全ゼロだった（$OUT）。" >&2
+	echo "FAIL: 440 Hz のトーン（$TONE）を鳴らしていたのに録音が全ゼロだった（$OUT）。" >&2
+	echo "      鳴っている音が tap に入らないので、許可が降りていないか tap が機能していない。" >&2
 	echo "      ファイルが読めなかった場合も exit 1 になる（stderr: $ANALYZE_ERR）。" >&2
+	echo "      出力デバイスの音量が 0 / ミュートでないかも確かめる（afplay は既定の出力に鳴らす）。" >&2
 	permission_help
 	exit 1
 fi
@@ -136,5 +198,5 @@ fi
 
 echo "== result =="
 echo "  段 1（録音を開始できる）  : OK"
-echo "  段 2（全ゼロでない）      : OK"
+echo "  段 2（鳴らした音が入る）  : OK"
 echo "許可あり"

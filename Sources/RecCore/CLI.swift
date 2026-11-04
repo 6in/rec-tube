@@ -14,7 +14,7 @@
 // 断言（この型の契約）:
 //   - 引数が不正なら**必ず** `RecError(code: .usage, ...)` を throw する（他の code は返さない）
 //   - `message` には必ず `usageText` が付く（人が次に何をすればよいか分かるように）
-//   - モードの指定が複数あったら**最後に来たものが勝つ**（旧実装 `git show main:rec.swift` と同じ）
+//   - モードの指定が複数あったら**最後に来たものが勝つ**（旧実装 `git show 45301d8:rec.swift` と同じ）
 
 import Foundation
 

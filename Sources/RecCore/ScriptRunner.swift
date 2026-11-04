@@ -2,7 +2,7 @@
 //
 // 断言: **URL / JS / タブ ID はスクリプト本文に埋め込まない**。必ず `arguments`（= `on run argv`）で渡す。
 // 根拠: RESEARCH §3.1。AppleScript の文字列リテラルで意味を持つのは `\` と `"` だけで、
-// 実リテラル改行は文字列終端扱いになり構文エラーになる（単一ファイル版の `chromeOpen`（`git show main:rec.swift`）
+// 実リテラル改行は文字列終端扱いになり構文エラーになる（単一ファイル版の `chromeOpen`（`git show 45301d8:rec.swift`）
 // がやっていた `"` → `%22` 置換では、`\` と改行を含む URL で壊れる）。
 //
 // 契約（ここだけが「osascript をどう呼ぶか」を知っている）:

@@ -4,7 +4,7 @@
 // スクリプト本文は入力に依存しない定数（`static let`）で、可変部は必ず `arguments`
 // （= AppleScript の `on run argv`）で渡す。
 // 根拠: RESEARCH §3.1。AppleScript の文字列リテラルは `\` と実リテラル改行で壊れる
-// （単一ファイル版（`git show main:rec.swift`）の `"` → `%22` 置換や `"\(js)"` 補間はそこで破綻する）。
+// （単一ファイル版（`git show 45301d8:rec.swift`）の `"` → `%22` 置換や `"\(js)"` 補間はそこで破綻する）。
 //
 // 役割分担:
 //   - `ScriptRunner` は「osascript をどう呼ぶか」だけを知る。stdout / stderr は**生のまま**返す。

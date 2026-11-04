@@ -56,7 +56,7 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
 | HAL 呼び出しを足す | `AudioHAL` protocol、`CoreAudioHAL`（実装）、`FakeHAL`（テスト）、`TapRecorder.stop()` の対応する destroy / remove | `FakeHAL` の「create と destroy の回数が一致」テスト（T5）が green |
 | 許可の種類・案内文 | `Sources/RecCore/Messages.swift`、README「許可」節（3 種）、`scripts/verify-permission.sh` | `rg -c 'NSAudioCaptureUsageDescription|オートメーション|Apple Events' README.md` ≥ 3 |
 | 検証スクリプトを足す | README「検証」節の一覧、この PLAN「検証コマンド」の実機検証行 | `ls scripts/verify-*.sh` の本数と README の一覧行数が一致 |
-| rec.swift の行番号参照（RESEARCH / PLAN の `rec.swift:NN`） | 履歴参照（`git show main:rec.swift`）として扱い、新コードのコメントに写さない | `rg -n 'rec\.swift:[0-9]' Sources README.md` が 0 |
+| rec.swift の行番号参照（RESEARCH / PLAN の `rec.swift:NN`） | 履歴参照（`git show 45301d8:rec.swift`）として扱い、新コードのコメントに写さない | `rg -n 'rec\.swift:[0-9]' Sources README.md` が 0 |
 | 件数を書いた文書 | README の「許可 3 種」「終了コード N 個」「検証スクリプト N 本」 | 上記 3 行の `rg` が通る |
 
 ## Tasks
@@ -604,7 +604,7 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
     - **PLAN 訂正: `Legacy` 参照コメントの掃除は 6 ファイルに及ぶ**（対象ファイル欄に無かった）:
       `AudioFileWriter.swift`（3 箇所）/ `ScriptRunner.swift` / `ChromeController.swift` / `HAL.swift` /
       `TapRecorder.swift` / `rec-probe/main.swift`（2 箇所）。すべてコメント文面だけで、コードは無変更。
-      言い換えの規約は「消えたファイルを指す参照は履歴参照（`git show main:rec.swift`）にする。
+      言い換えの規約は「消えたファイルを指す参照は履歴参照（`git show 45301d8:rec.swift`。F3 turn 17 で `main:` から訂正）にする。
       `rec.swift:NN` の行番号は新たに書かない」（追従先チェックリストの最終行と同じ方針）
     - 確定した API（T10 / T11 はこの名前で使う）:
       `usageText: String`（`let`。usage エラーの `message` にも**必ず丸ごと含まれる**）；
@@ -823,7 +823,7 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
     - `ScriptRunner` の打ち切り経路（SIGTERM → SIGKILL、パイプの grace）には**単体テストが無い**
       （本物の `osascript` を起動しないと再現できない）。今回は `NSLock` の追加と数値の `Tuning` 移動だけで挙動は変えていない
 
-- [ ] F3: 文書とスクリプトの整合（VERIFICATION §4「文書・スクリプト」。すべて 1 タスクにまとめる）
+- [x] F3: 文書とスクリプトの整合（VERIFICATION §4「文書・スクリプト」。すべて 1 タスクにまとめる）
   - 完了基準:
     - `git show main:rec.swift` → `git show 45301d8:rec.swift`（`rec.swift` は main に無い。`git log --diff-filter=A -- rec.swift` で確認）。
       README 7 行目、`CLI.swift` / `ScriptRunner.swift` / `AudioFileWriter.swift`（2）/ `HAL.swift` / `ChromeController.swift` / `TapRecorder.swift` / `rec-probe/main.swift` のコメント、
@@ -849,6 +849,56 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
     `Sources/RecCore/{CLI,ScriptRunner,AudioFileWriter,HAL,ChromeController,TapRecorder,SignalWatcher}.swift`, `Sources/rec-probe/main.swift`, `.gsd-lite/PLAN.md`（#2 の訂正）
   - 依存: F1（E10 の文言を参照する）
   - 並列サブ作業: A: README + PLAN #2 / B: scripts 4 本 + コメント掃除
+  - **F3 の実測（turn 17）**:
+    - **PLAN 訂正: サブ作業を分けずに親が全部やった**（`subagents: auto` / サブ作業 2 本だが並列に出していない）。
+      根拠: F3 は文書とスクリプトを**互いに一致させる**タスクで、A（README）と B（scripts）の成果物が
+      `scripts/final-check.sh` の追従チェックで直接噛み合う（`ls scripts/verify-*.sh` の本数 ==
+      README の一覧行数、ExitCode の case 数 == README の表の行数）。独立に書かせると一致の保証が
+      統合時にしか取れず、往復が増える。T3〜T6 の「共有物は親が作る」の延長で、ここでは**全部が共有物**。
+      コード変更も Swift のコメント 10 箇所だけで、並列の利得（独立にテストを書かせる）が無い
+    - `git show main:rec.swift` は**最初から誤り**だった: `rec.swift` は main に一度も入っていない
+      （`git log --diff-filter=A -- rec.swift` → `45301d8 gsd-lite(discuss): rec-cli-hardening 要件確定`）。
+      置換は 9 ファイル 10 箇所（`AudioFileWriter.swift` が 2）+ `scripts/final-check.sh` の fail 文言。
+      PLAN 自身の 3 箇所（追従先チェックリスト / T9 実測欄 / メモ）も直した
+    - **`rg` の除外グロブはパス全体に当たる**（PLAN の実測どおりを再確認）:
+      `-g '!rec-probe/**'` は `Sources/rec-probe/main.swift` を**除外しない**（`rg -c 440 Sources -g '!rec-probe/**'`
+      → 6 行ヒット）。`-g '!Sources/rec-probe/**'` なら 0 行。スラッシュを含むグロブはパス先頭からの照合、
+      スラッシュの無い `!Tuning.swift` はベース名照合（こちらは効いている）。final-check.sh を後者に直した
+    - **PLAN 追記: final-check.sh に検査を 2 つ足した**（完了基準に無いので訂正として残す）:
+      (1) **調整値リテラルの自己テスト**。前後を縛る形（`(^|[^0-9.])0\.7([^0-9]|$)`）にすると正規表現が
+          複雑になり、壊れて 0 件になったときに「違反なし」で通ってしまう。`Tuning.swift` に対して
+          同じパターンを回して **5 行以上**拾えることを先に確かめる（ExitCode の `-gt 0` ガードと同じ趣旨）。
+      (2) **`rg -n 'standardError\.write' Sources` が 0**。F2 の完了基準にあった不変条件で、
+          破ると fd 2 閉鎖時に SIGABRT に戻る（E19）。恒久の検査にした
+    - **段 1 の exit 4 は失敗ではない**（`verify-permission.sh`）: 段 1（`rec-probe tap system 2`）の時点では
+      まだトーンを鳴らしていないので、全編ゼロ（exit 4）は正常。許可なしと断定するのは exit 8 だけ。
+      直す前のスクリプトは exit 4 を一律 `fail` にしていたので、**何も鳴っていない状態では必ず落ちた**
+      （PLAN の「exit 4 と exit 8 を読み分ける」はここを指していた）
+    - `verify-permission.sh` のトーンは `afplay` を `while` で回す（`main.wav` は 12 秒、録音は 2 秒だが
+      SIGINT が効かないと最大 20 秒になるため）。後始末は 2 段: ループ本体に `kill -TERM` →
+      すでに起動済みの子 `afplay` は親を殺しても残るので `pkill -f "afplay $TONE"`。
+      さらに `sleep 1` の後に `kill -0` でループの生存を確かめる（afplay が鳴らせない環境を
+      「鳴らしていたのに全ゼロ」と誤診しないため）
+    - **自動再生拒否は exit 6 では拾えない**（`verify-adtest.sh` / README）: F1 以降、`rec` は
+      `Messages.autoplayRejected` を stderr に 1 行出して**録音を続ける**ので、本編が始まらないまま
+      `main paused` を見続け、スクリプトの上限 180 秒で打ち切られて **exit 143** になる。
+      判定を `grep -q '自動再生を拒否しました' "$REC_ERR"` だけに変え、終了コードを見ない形にした
+    - `pkill -f 'Google Chrome Helper.*audio\.mojom\.AudioService'` が実機で**ちょうど 1 件**に当たるのを
+      `pgrep -lf` で確認（`--type=utility --utility-sub-type=audio.mojom.AudioService` の
+      `Google Chrome Helper (Aperitif)`）。裸の `audio.mojom.AudioService` は `-f` の全文照合なので
+      この文字列を引数に持つ無関係なプロセスにも当たりうる
+    - **`Messages` の停止理由と README「終了コード」表に矛盾なし**（目視）: `Messages.stopReason` の
+      switch にある 14 case + `.signal(sig)` は、表の「主な `StopReason`」列に全部現れ、逆も同じ。
+      秒数の言い回し（`.pageUnavailable` の 60 秒 / `.pageUnresponsive` の 20 秒）も表と一致する
+    - 検証: `swift build` / `swift test` **220 本 green**（F3 はコメントしか触らないので本数は変わらない）、
+      `swift .gsd-lite/logs/rec-cli-hardening/scratch/turn-017-syntax.swift` で
+      **`scripts/*.sh` 9 本すべて `bash -n` exit 0** + final-check.sh の「追従チェック」節の写しが ALL OK
+      （本体は `rm -rf .build` + 2 ビルドを含み、無人ターンからは allowlist に当たらないので節だけ写して回した）。
+      `rg -n 'main:rec\.swift' README.md Sources Tests scripts` = 0、`rg -n 'rec\.swift:[0-9]' Sources README.md` = 0、
+      `rg -n 'workspaces/|/Users/ohya' Sources Tests README.md scripts` = 0
+    - **実機未検証**: `verify-permission.sh` の段 2（afplay + 録音）と `verify-adtest.sh` は
+      システム音声の取得の許可が要るのでこのターンでは回していない（メモの【verify 前に必要な人の操作】のまま）。
+      `afplay` の存在（`/usr/bin/afplay`）と `Tests/Fixtures/main.wav` が 440 Hz・12 秒であること（`afinfo`）は確認済み
 
 ## 決めた事項
 
@@ -862,8 +912,12 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
 2. **Chrome の tap 対象（T2 が確定して書き換える）**: 初期値 `chromeTapTarget = .bundleIDs(chromeBundleIDs, seed: <起動時に prefix "com.google.Chrome" で一致した running 含む全プロセス>)`
    （hybrid）、`chromeBundleIDs = ["com.google.Chrome", "com.google.Chrome.helper", "com.google.Chrome.helper.renderer", "com.google.Chrome.helper.gpu", "com.google.Chrome.helper.plugin", "com.google.Chrome.helper.alerts"]`
    （T2 (0) の実測で `["com.google.Chrome", "com.google.Chrome.helper"]` の 2 名に確定。コードは `RecCore.Chrome.bundleIDs`）。`isProcessRestoreEnabled = true`。
-   録音開始（`TapRecorder.start`）は rec.swift:212-219 と同じく「Chrome の音声プロセスが running になった後」に
-   行う（seed を取るため。bundleIDs 単独で動いてもこの待ちは残す）。
+   ~~録音開始（`TapRecorder.start`）は rec.swift:212-219 と同じく「Chrome の音声プロセスが running になった後」に
+   行う（seed を取るため。bundleIDs 単独で動いてもこの待ちは残す）。~~
+   **訂正（T8 turn 10 の実測 (7)。F3 turn 17 で本文に反映）**: この「running になるまで待つ」ループは**作らない**。
+   録音を始める条件は `SessionPolicy` の表（#10）が唯一の正で、表は「初回の完全な probe 応答」を条件にしている。
+   seed は `.startRecording` の時点で見えている Chrome のプロセスをそのまま使う（`bundleIDs` 単独でも tap は張れる。T2 の実測）。
+   旧実装の待ちループは同じことを別の手段でやっていたもので、2 つ持つと「いつ録り始めるか」の正が二重になる。
    **T2 の結果（turn 4）: `hybrid`（`bundleIDs` + seed）のまま確定。** (a)〜(e) の音の有無は許可が降りていないため未実測
    （`AudioDeviceCreateIOProcIDWithBlock` がブロックする。T2 の実測欄）。許可が降りた後に `swift run rec-probe tap bundleids 3` /
    `hybrid` / `processes` を回して、(b)(c)(d) が全部可なら seed なしに落とす（verify の宿題。VERIFICATION に手動項目として残す）。
@@ -994,7 +1048,7 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
   B1〜B4→T1、B5→T10/T11。並行性: T3（連番の同時要求）、T5（stop の同時呼び出し、TSan）、T6（coordinator）。境界値: T3（255 バイト・空・結合文字）、
   T4（guard 0 / 超過 / 端数、-60.0 ちょうど）、T8（19 秒で復帰、別 id の広告）。異常系: T3（EROFS 等 errno 全般）、T4（write エラー）、T5（各段の失敗）、T7（-1743、turned off、壊れた JSON）
 - **自動再生の段階的対処**（T10 の実機で `playErr` が出たとき。順に試し、どこまでで動いたかを README に書く）:
-  (1) `file://` のまま（probe の `play()` で動く見込み）→ (2) `python3 -m http.server 8765 --directory Tests/Fixtures` で `http://localhost:8765/adtest.html?v=local1`
+  (1) `file://` のまま（probe の `play()` で動く見込み）→ (2) `python3 -m http.server 8765 --bind 127.0.0.1 --directory Tests/Fixtures` で `http://localhost:8765/adtest.html?v=local1`
   （allow 済み。スクリプト内で起動して終了時に kill）→ (3) Chrome のポリシー `AutoplayAllowlist`（`defaults write com.google.Chrome AutoplayAllowlist -array 'file://*' 'http://localhost:8765'`。
   **impl は実行しない**。README に「ローカル検証ページ用の設定」として書き、verify は VERIFICATION に手動項目として残す）
 - **サンドボックス**: `swift build` が `~/Library/Caches/org.swift.swiftpm` 等への書き込みで失敗したら、scripts に `--cache-path .build/.cache --config-path .build/.config --security-path .build/.security`
@@ -1003,4 +1057,5 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
   `open` コマンドは allow していない
 - **並列サブ作業の依頼文に必ず入れる文言**（impl スキルの固定文言に加えて）: 「PLAN の API 名（型名・関数名・`Tuning` の定数名）はそのまま使う。
   別名にしたいときは実装せず報告に書く」
-- **rec.swift の行番号**: この PLAN と RESEARCH の `rec.swift:NN` は T1 以降 `git show main:rec.swift` で参照する（ファイルは移動する）
+- **rec.swift の行番号**: この PLAN と RESEARCH の `rec.swift:NN` は T1 以降 `git show 45301d8:rec.swift` で参照する（ファイルは移動する）。
+  **`main:rec.swift` ではない**: `rec.swift` は main ブランチには一度も入っていない（`git log --diff-filter=A -- rec.swift` → 45301d8 = `gsd-lite(discuss)` のコミットで追加）。F3 turn 17 で訂正

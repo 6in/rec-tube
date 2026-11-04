@@ -41,7 +41,7 @@ swift test
 echo "== 追従チェック =="
 # 移動元の行番号参照（rec.swift:NN）を新しいコードや README に持ち込まない。
 if rg -n 'rec\.swift:[0-9]' Sources README.md; then
-	fail "rec.swift:NN の参照が残っている（履歴参照は git show main:rec.swift を使う）"
+	fail "rec.swift:NN の参照が残っている（履歴参照は git show 45301d8:rec.swift を使う）"
 fi
 # ExitCode の case 数と README「終了コード」表の行数が一致する（**数は直書きしない**）。
 exit_cases="$(rg -c '^    case .* = [0-9]+$' Sources/RecCore/ExitCode.swift || echo 0)"
@@ -80,11 +80,37 @@ echo "  scripts/verify-*.sh: $verify_count 本 / README の一覧: $readme_verif
 # 1.2（Tuning.ssaiDurationRatio）は外した: SessionPolicy.swift のコメントに
 # 「#8 の条件は `dur > len × 1.2`」として出てくる。rg はコメントと数値リテラルを区別できないので
 # 入れると永久に落ちる（値そのものは Tuning.ssaiDurationRatio を経由している）。
+#
+# 数値は前後を縛る（`(^|[^0-9.])…([^0-9]|$)`）。裸の `0\.7` / `3\.0` だと `10.7` や `13.0`、
+# `0.75` のような別の数の一部にも当たって偽陽性になる（F3 turn 17 で縛りを足した）。
+#
 # Sources/rec-probe は対象外: 440 / 1000 Hz・12 / 4 秒は検証素材の寸法で、
 # Tuning（製品コード RecCore の調整値置き場）の管轄外（PLAN T10 の訂正欄）。
-if rg -n -e '-60\.0' -e '-50\.0' -e '0\.7' -e '3\.0' -e 'ad-showing' Sources \
-	-g '!Tuning.swift' -g '!rec-probe/**'; then
+# 除外グロブは **パス全体**に当てる: `-g '!rec-probe/**'` では Sources/rec-probe/ を除外できない
+# （スラッシュを含むグロブはパス先頭からの照合になる。実測。スラッシュの無い `!Tuning.swift` は
+# ベース名に当たるのでこれは効く）。
+TUNING_LITERALS=(
+	-e '(^|[^0-9.])-60\.0([^0-9]|$)'
+	-e '(^|[^0-9.])-50\.0([^0-9]|$)'
+	-e '(^|[^0-9.])0\.7([^0-9]|$)'
+	-e '(^|[^0-9.])3\.0([^0-9]|$)'
+	-e 'ad-showing'
+)
+# 先に「正規表現が生きている」ことを本家（Tuning.swift）で確かめる。
+# これが無いと、正規表現が壊れて 0 件になったときに「違反なし」として通ってしまう。
+literal_self_test="$(rg -c "${TUNING_LITERALS[@]}" Sources/RecCore/Tuning.swift || echo 0)"
+echo "  調整値リテラルの自己テスト: Tuning.swift で $literal_self_test 行（5 以上）"
+[ "$literal_self_test" -ge 5 ] ||
+	fail "調整値リテラルの正規表現が Tuning.swift で $literal_self_test 行しか拾えない（検査が壊れている）"
+if rg -n "${TUNING_LITERALS[@]}" Sources \
+	-g '!Tuning.swift' -g '!Sources/rec-probe/**'; then
 	fail "調整値が Tuning.swift の外に直書きされている（Tuning.<名前> を経由すること）"
+fi
+
+# 人向けの stderr の出口は Sources/RecCore/Console.swift の writeStderr(_:) だけ（F2）。
+# FileHandle.standardError.write(_:) は fd 2 が閉じていると Objective-C 例外で SIGABRT になる。
+if rg -n 'standardError\.write' Sources; then
+	fail "FileHandle.standardError.write が残っている（RecCore.writeStderr を使う。F2 の E19）"
 fi
 
 # 単一ファイル版 rec.swift はリポジトリ直下から移動済み（T1 の git mv）。

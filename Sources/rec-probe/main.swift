@@ -125,7 +125,7 @@ final class Meter: @unchecked Sendable {
 
 // MARK: - tap + aggregate + IOProc
 
-/// 単一ファイル版の `Recorder`（`git show main:rec.swift`）から「ファイルに書く」部分を抜いたもの。
+/// 単一ファイル版の `Recorder`（`git show 45301d8:rec.swift`）から「ファイルに書く」部分を抜いたもの。
 /// T5 の `TapRecorder` の下敷き。
 ///
 /// 作成の途中で失敗したら、作った分だけを逆順で壊してから throw する（RESEARCH §5.1 AudioCap）。

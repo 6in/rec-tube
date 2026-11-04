@@ -4,7 +4,7 @@ macOS の音声を録音する CLI。Core Audio の Process Tap で指定した�
 出力をそのまま掴み、`--url` では Chrome で YouTube を開いて**本編だけ**を m4a に残す。
 
 > 現在 `rec-cli-hardening` マイルストーンの実装中。単一ファイル版から移した暫定コードは
-> すべて `Sources/RecCore` の各型に置き換わった（単一ファイル版は `git show main:rec.swift`）。
+> すべて `Sources/RecCore` の各型に置き換わった（単一ファイル版は `git show 45301d8:rec.swift`）。
 
 ## 必要なもの
 
@@ -70,12 +70,14 @@ rec --list                               # 音声を扱っているプロセス�
 
 | オプション | 既定 | 意味 |
 |---|---|---|
-| `-o <パス>` | `rec-<日時>.m4a`（`--url` はページのタイトル由来） | 出力先。拡張子が無ければ `.m4a` を付ける |
+| `-o <パス>` | `rec-<日時>.m4a`（`--url` はページのタイトル由来） | 出力先。拡張子は `m4a` のみ。他を渡すと引数エラー（exit 1）。無ければ付ける |
 | `--ad-guard <秒>` | `1.0`（範囲 `0`〜`10`） | 広告ガードの遅延。`--url` のときだけ効く |
 
 - **出力ファイル名**: `-o` 省略時は `--url` ならページのタイトル（使えない文字は `_`、UTF-8 で 200 バイトに切る）、
   それ以外は `rec-yyyyMMdd-HHmmss.m4a`。**同名のファイルがあれば `-2` / `-3` … を拡張子の手前に付ける**
   （`-o` を指定した場合も同じ。既存ファイルを上書きしない）。
+- **`-o` の形**: `-o out.m4a` はそのファイル名、`-o dir/` と `-o <既存のディレクトリ>` は
+  そのディレクトリに既定の名前で置く。`-o ''`（空文字列）と `m4a` 以外の拡張子は引数エラー（exit 1）。
 - **`--url` の停止条件**: 再生が最後まで終わる / 次の動画へ遷移する / タブが閉じられる。
   広告は録音に含めず、広告明けは `0.7` 秒だけ巻き戻してから録り直す。
 - **`--url` 以外**は広告判定をしないので遅延線を使わない（`--ad-guard` は無視される）。
@@ -101,6 +103,9 @@ rec --list                               # 音声を扱っているプロセス�
 - **許可が無いときの症状（実測）**: ダイアログが出ないまま `AudioDeviceCreateIOProcIDWithBlock` が無期限にブロックする。
   **10 秒の watchdog（`Tuning.tapStartTimeoutSeconds`）で exit 8** になり、`Messages.systemAudioPermission`
   の案内（許可の場所・tmux の注意・`tccutil reset ScreenCapture`）が stderr に出る。
+- **録音はできるのに全編無音（exit 4）のとき**も、この許可が疑わしい。tap を作れても対象の音が
+  流れてこない形で、ファイルは残したまま exit 4 で終わる。`scripts/verify-permission.sh` が
+  440 Hz のトーンを自分で鳴らしながら 2 秒録って、全ゼロかどうかで切り分ける。
 
 ### 2. オートメーション（`--url` のみ）
 
@@ -141,16 +146,21 @@ Chrome のメニュー「表示 > 開発/管理 > **Apple Events からの JavaS
 実機検証のスクリプトは **6 本**。出力は `.gsd-lite/logs/rec-cli-hardening/scratch/` 配下に置かれる。
 いずれも `timeout` に依存せず bash の `sleep` + `kill` で制御する。
 
-- `scripts/verify-permission.sh` — 録音を開始できるか（`rec-probe tap system 2`）と 2 秒のシステム全体録音が全ゼロでないかを見る。前提: システム音声の録音。
+- `scripts/verify-permission.sh` — 録音を開始できるか（`rec-probe tap system 2`）と、2 秒のシステム全体録音が全ゼロでないかを見る。**スクリプトが自分でトーンを鳴らす**（`Tests/Fixtures/main.wav` を `afplay` で流し、無ければ `rec-probe tones` で作る）ので、人が音源を用意しなくてよい。前提: システム音声の録音。
 - `scripts/verify-signals.sh` — 3 秒録音して SIGINT / SIGTERM / SIGHUP を送り、exit 130 / 143 / 129 と 2 秒以上の m4a が残ることを見る。前提: システム音声の録音。
 - `scripts/verify-adtest.sh` — ローカル検証ページを `--url` で録り、広告混入 0 窓・本編 12 秒 ± 1 秒を見る。前提: 許可 3 種すべて。
 - `scripts/verify-youtube.sh` — 実際の YouTube（既定 `https://www.youtube.com/watch?v=jNQXAC9IVRw`）を完走させ、exit 0・duration > 0・出力名がタイトル由来を見る。前提: 許可 3 種すべて。
-- `scripts/verify-helper-restart.sh` — 録音中に `pkill -f audio.mojom.AudioService` で Chrome の音声ヘルパーを落とし、完走後の後半にも可聴窓があるかを見る。前提: 許可 3 種すべて。
+- `scripts/verify-helper-restart.sh` — 録音中に `pkill -f 'Google Chrome Helper.*audio\.mojom\.AudioService'` で Chrome の音声ヘルパーを落とし、完走後の後半にも可聴窓があるかを見る。前提: 許可 3 種すべて。
 - `scripts/verify-longrun.sh` — システム全体録音を N 分（既定 10 分）続け、`ps -o rss=` の差が 10 MB 未満かを見る。前提: システム音声の録音。
 
 実行順の推奨は verify-permission.sh → verify-signals.sh → verify-adtest.sh → verify-youtube.sh →
 verify-helper-restart.sh → verify-longrun.sh。許可の確認から始めて、録音だけ・ローカルページ・実ネットワーク・
 異常系・長時間の順に重くなる。
+
+> `.claude/settings.json` の allowlist にある `Bash(pkill -f audio.mojom.AudioService)` は
+> Claude Code が直に `pkill` を呼ぶときの許可で、`verify-helper-restart.sh` の中からの呼び出しには
+> 関係しない（スクリプトの実行が許可されれば中身は素通し）。スクリプト側のパターンを絞っても
+> allowlist は変えなくてよい。
 
 ### ローカル検証ページ
 
@@ -166,10 +176,18 @@ swift run rec-probe analyze /tmp/adtest.m4a --main 440 --ad 1000 --expect-main 1
 
 ### 自動再生の段階的対処
 
-`rec` が exit 6 で終わり stderr に `playErr` が出たときは、Chrome が自動再生を拒否している。次の順に試す:
+**見分け方は終了コードではなく stderr の 1 行**: 自動再生を拒否されると `rec` は
+「ブラウザが自動再生を拒否しました（<理由>）」を stderr に 1 回出して**録音を続ける**。
+本編が始まらないまま `main paused` を見続けるので録音は終わらず、`scripts/verify-adtest.sh` の
+上限 180 秒で打ち切られて **exit 143**（= 128 + SIGTERM）になる。exit 6 にはならないので、
+判定はこの行の有無だけで行う（`verify-adtest.sh` もそうしている）。
+
+次の順に試す:
 
 1. `file://` のまま（probe の `play()` で動く見込み）。
-2. `python3 -m http.server 8765 --directory Tests/Fixtures` 経由で `http://localhost:8765/adtest.html?v=local1` を録る。
+2. `python3 -m http.server 8765 --bind 127.0.0.1 --directory Tests/Fixtures` 経由で
+   `http://localhost:8765/adtest.html?v=local1` を録る（`--bind 127.0.0.1` でループバックだけに出す。
+   付けないと LAN 全体に Tests/Fixtures を公開してしまう）。
 3. Chrome の自動再生を許可する（`AutoplayAllowlist` ポリシー、または `chrome://settings/content/sound`）。
 
 **(3) は人の操作。スクリプトは実行しない。**
@@ -191,6 +209,16 @@ swift run rec-probe analyze /tmp/adtest.m4a --main 440 --ad 1000 --expect-main 1
 - **`--url` は YouTube 向け**: `<video>` のあるページはベストエフォートで録れるが、
   **広告判定（`#movie_player.ad-showing` / `.ad-interrupting`）は YouTube の DOM に依存する**。
 - **macOS 26 以上が必要**（`LSMinimumSystemVersion` = 26.0）。Core Audio の Process Tap と bundle-ID tap に依存する。
+- **Chrome を終了している状態で `--url` を使うと Chrome を起動してしまう**: AppleScript の
+  `tell application "Google Chrome"` が Chrome を起こす。起動直後はウィンドウの用意が間に合わず、
+  開いたタブを見つけられずに `gone` 扱いになって **exit 6** で終わることがある。
+  `--url` は Chrome を起動してから使う。
+- **ページの状態を見ている間はシグナルの処理が遅れる**: 0.5 秒ごとの poll は `osascript` を
+  同期に呼ぶので、1 回あたり最大 15 秒（`Tuning.osascriptTimeoutSeconds`）は `Ctrl-C` の反応が
+  その分だけ遅れる。すぐには止まらないが、応答が返った時点で停止する。
+- **終了処理中の 2 度目の `Ctrl-C` は効かない**: 停止要求は最初の 1 本しか採用しない
+  （`StopCoordinator`）。ファイルを閉じている間に `Ctrl-C` を連打しても早くは終わらない。
+  `kill -9` なら止まるが、`moov` アトムを書く前なので **m4a は壊れる**。
 - **許可が無い環境では「録音開始前の中断」をシグナルで止められない**（実測）: 録音開始はセッションキュー上で
   同期に走るので、`AudioDeviceCreateIOProcIDWithBlock` がブロックしている 10 秒間は `SIGINT` のハンドラが
   走れず `Ctrl-C` が効かない。10 秒後に watchdog が exit 8 で終わる。

@@ -6,9 +6,14 @@
 #
 # 手順:
 #   1. .build/debug/rec --url <URL> -o <scratch>/helper-restart-<日時>.m4a を起動
-#   2. 10 秒後に pkill -f audio.mojom.AudioService（Chrome の音声サービスだけ再起動させる）
+#   2. 10 秒後に pkill -f 'Google Chrome Helper.*audio\.mojom\.AudioService'
+#      （Chrome の音声サービスだけ再起動させる）
 #      1 件も殺せなかった（pkill が exit 1）場合は「音声サービスが見つからない = 再生していない」
 #      として失敗にする
+#      **パターンは「Google Chrome Helper の、かつ audio.mojom.AudioService」まで絞る**:
+#      裸の `audio.mojom.AudioService` は `-f`（コマンドラインの全文照合）なので、この文字列を
+#      コマンドラインに含む無関係なプロセス（別のブラウザのユーティリティ、ログを引数に持つ
+#      ツールなど）にも当たりうる。Chrome の音声ヘルパー以外を落とさないように縛る。
 #   3. 上限 180 秒で kill -TERM。完走（exit 0）を期待
 #   4. swift run rec-probe analyze <出力> --main 440 --ad 1000 の verdict（JSON）を取り、
 #      silentSeconds < totalSeconds × 0.25 であることを確かめる
@@ -101,9 +106,9 @@ killer_pid=$!
 
 sleep "$KILL_AFTER"
 
-echo "== pkill -f audio.mojom.AudioService（$KILL_AFTER 秒後）=="
+echo "== pkill -f 'Google Chrome Helper.*audio\.mojom\.AudioService'（$KILL_AFTER 秒後）=="
 pkill_code=0
-pkill -f audio.mojom.AudioService || pkill_code=$?
+pkill -f 'Google Chrome Helper.*audio\.mojom\.AudioService' || pkill_code=$?
 echo "  pkill exit: $pkill_code（0 = 1 件以上殺した / 1 = 一致なし）"
 
 if [ "$pkill_code" -ne 0 ]; then
@@ -112,7 +117,7 @@ if [ "$pkill_code" -ne 0 ]; then
 	wait "$rec_pid" 2>/dev/null || true
 	kill -TERM "$killer_pid" 2>/dev/null || true
 	wait "$killer_pid" 2>/dev/null || true
-	fail "Chrome の音声サービス（audio.mojom.AudioService）が見つからない（pkill exit $pkill_code）= Chrome が音を鳴らしていない。再生が始まっているか、許可 3 種が揃っているかを確かめる（stderr: $REC_ERR）"
+	fail "Chrome の音声サービス（Google Chrome Helper … audio.mojom.AudioService）が見つからない（pkill exit $pkill_code）= Chrome が音を鳴らしていない。再生が始まっているか、許可 3 種が揃っているかを確かめる（stderr: $REC_ERR）"
 fi
 
 rec_code=0

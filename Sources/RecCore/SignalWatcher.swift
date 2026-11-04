@@ -1,6 +1,6 @@
 // SignalWatcher.swift — SIGINT / SIGTERM / SIGHUP を「停止要求」に変える。
 //
-// 参考実装: `~/workspaces/openclaw/sample1/upstream/openclaw/apps/macos/Sources/OpenClaw/TerminationSignalWatcher.swift`
+// 参考実装: OpenClaw の `TerminationSignalWatcher.swift`（`signal(SIG_IGN)` → `DispatchSource` の順）
 //
 // **断言（この型の契約）**:
 //   - `DispatchSource.makeSignalSource` を作る**前に** `signal(sig, SIG_IGN)` を呼ぶ。
