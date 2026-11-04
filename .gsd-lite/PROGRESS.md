@@ -515,3 +515,4 @@
   あると便利な allowlist: `Bash(bash -n:*)`（verify スクリプトの構文検査）、
   `Bash(scripts/final-check.sh:*)`（最終判定を 1 発で回す）
 - 契約外の提案: なし（このターンはサブエージェントを使っていない。前のターンの実装を検証・取り込んだだけ）
+- 承認待ち（ループ計測・turn 13）: 5 件 — Bash: awk ×3, Bash: gsd-lite-loop.sh, Bash: swift
