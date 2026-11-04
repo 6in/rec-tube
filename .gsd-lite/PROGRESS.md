@@ -168,3 +168,50 @@
   (7) 実機の許可（システム設定 > プライバシーとセキュリティ > システム音声の録音で iTerm2 を許可 →
   iTerm2 再起動）はまだ必要。T10 / T11 の verify-* に入る前に人の操作が要る
 - 承認待ち（ループ計測・turn 6）: 1 件 — Bash: rec
+
+## turn 7 — impl — T5 `TapRecorder`（HAL 抽象化・リスナー・冪等 stop・途中失敗の後始末）+ `FakeHAL`
+- やったこと: 共有物（`AudioHAL` protocol + `CoreAudioHAL`、`Fakes/FakeHAL.swift`）を親が先に作り、
+  `TapRecorder` の実装と `TapRecorderTests` を並列サブエージェント 2 本に分けて（テスト側は実装を
+  読まずに契約だけから記述）、統合した。`Legacy.swift` の `Recorder` は `LegacyRecorder` に改名。
+  `swift test` 64 本 green（既存 55 + 9）、debug / release ビルド green（warning 0）、
+  `rec --bogus` が 1 / `--list` が 0、`rg 'rec\.swift:[0-9]'` が 0 件
+- 想定外: (1) **並列構成が狙いどおり仕様違反を 1 件拾った**。実装は「`start()` が時間切れしたら、
+  打ち切り側がその時点までの控えを即破棄する」形で書かれていたが、ブロック中の `createIOProc` が
+  後から戻ると IOProc の破棄だけが後回しになり、**破棄の列が逆順にならない**（テストが
+  `destroyIOProc < destroyAggregate < destroyTap` で落とした）。→ 契約どおり
+  「打ち切り側は旗だけ立て、**資源の持ち主（作成スレッド）が戻ったところで逆順に破棄する**」に直した。
+  安全面でもこちらが正しい（Core Audio の呼び出しの最中に、その呼び出しが掴んでいる
+  aggregate / tap を外から壊さない）。PLAN T5 に実測として記録
+  (2) **`swift test --sanitize=thread` はこの環境では実行できない**（PLAN T5 の完了基準の最後の項目）。
+  ビルドは通るが dyld が `libclang_rt.tsan_osx_dynamic.dylib` を
+  「code signature not valid for use in process: Sanitizer load violates platform policy」で読めない。
+  `--sanitize=address` も同じ。Swift Testing 側の問題ではないので、**通常実行のみで green** とした
+  （代わりに「10 スレッド同時 stop で destroy が各 1 回」をテストで担保）
+  (3) **PLAN 訂正: IOProc / listener を生の `AudioDeviceIOProcID` でやり取りできない**。C の関数ポインタ型
+  なので `FakeHAL` が値を作れず、listener の解除も「登録した block と queue の両方」が要る。
+  → `IOProcToken` / `ListenerToken`（`payload: Any?` の箱）に包む形に訂正
+  (4) **PLAN 追記: `TapRecorder.init` に `startTimeout`（既定 `Tuning.tapStartTimeoutSeconds`）を足した**。
+  watchdog のテストを 10 秒待たずに回すため（テストは 0.2 秒を渡す）
+  (5) **PLAN 訂正: 並列サブ作業の割り方**。protocol と、それを実装する test double（`FakeHAL`）は
+  同時に書かないと噛み合わないので**親が両方作り**、並列は「実装」と「テスト」の 2 本にした
+  （T3 turn 5 / T4 turn 6 の「共有型は親が完成させる」と同じ理屈）
+  (6) 並列中に親が `swift build` を回したら `input file ... was modified during the build` で失敗した。
+  **サブエージェントが担当ファイルを書いている間は、親は同じソースツリーをビルドしない**
+- 既存テストの期待値を変えた箇所: なし（既存 55 本は 1 本も変えていない。追加のみ。
+  `Recorder` → `LegacyRecorder` の改名はテストから参照されていなかった）
+- やり直し: 1 回（上記 (1)。実装側を契約に寄せて直し、`swift test` で green を確認）
+- 次への注意: (1) 次は **T6**（`StopCoordinator` / `SignalWatcher` / `PowerWatcher`）。純粋ロジック中心で
+  実機の許可に依存しない。並列サブ作業は PLAN どおり A（coordinator + signal）/ B（power）の 2 本で、
+  **共有物が無いので今回のような親先出しは不要**。
+  (2) **`sink` の中から `TapRecorder.stop()` を呼ぶと `ioQueue.sync {}` で自己デッドロックする**。
+  T8 は停止要求をセッションキューに逃がすこと（`coordinator.request` を IO キュー上で完了させない）。
+  T6 の `StopCoordinator.onFirstRequest` を**セッションキューで呼ぶ**設計はこの理由でも必須。
+  (3) `TapRecorder.stop()` は「捨てる旗」を立てるので **`stop()` 後の `start()` は即失敗する**（再開しない）。
+  T8 は `start()` を 1 回しか呼ばない前提で書くこと。
+  (4) `onEvent` は `rec.recorder.events`（TapRecorder 内部の直列キュー）上、`sink` は渡した `ioQueue` 上で
+  呼ばれる。T8 はこの 2 つのキューからセッションキューへ必ず移す。
+  (5) T5 で確定した API 名は PLAN「T5 の実測」に全部書いた。
+  (6) **サブエージェントが書いている間、親はビルドしない**（上記 (6)）。親の待ち時間は
+  ビルド以外の確認（`otool` / `grep` / 文書）に使う。
+  (7) 実機の許可（システム設定 > プライバシーとセキュリティ > システム音声の録音で iTerm2 を許可 →
+  iTerm2 再起動）はまだ必要。T10 / T11 の verify-* に入る前に人の操作が要る
