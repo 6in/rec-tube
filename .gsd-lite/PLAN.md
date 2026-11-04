@@ -194,7 +194,7 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
     - `Sources/rec/main.swift` の catch を `RecError.code` で `exit` する形に変えた（T9 の配線一本化の前倒し。最小限）。
       `--bogus` が 1 / `--list` が 0 / `--app` 不一致が 1 は変わらず
 
-- [ ] T4: 遅延線（広告ガード）・無音メータ・録音パイプライン（純粋ロジック + ユニットテスト）
+- [x] T4: 遅延線（広告ガード）・無音メータ・録音パイプライン（純粋ロジック + ユニットテスト）
   - 完了基準:
     - `Sources/RecCore/Tuning.swift`: 決めた事項 #4〜#8 の定数を `enum Tuning { static let … }` に集約（他ファイルは数値を直書きしない）
     - `Sources/RecCore/DelayLine.swift`: `final class DelayLine`（`init(format: AVAudioFormat, guardSeconds: Double)`、`guardFrames = Int((guardSeconds * sampleRate).rounded())`、
@@ -223,6 +223,39 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
     - A: Tuning + DelayLine + テスト（対象: `Tuning.swift`, `DelayLine.swift`, `DelayLineTests.swift`）
     - B: SilenceMeter + Signals + テスト（対象: `SilenceMeter.swift`, `Fakes/Signals.swift`, `SilenceMeterTests.swift`）
     - C: RecordingPipeline + テスト（対象: `RecordingPipeline.swift`, `RecordingPipelineTests.swift`。A/B の公開 API 名は上記のとおり固定して先に伝える）
+  - **T4 の実測（turn 6）**:
+    - **PLAN 訂正: 共有物（`Tuning.swift` と `Tests/RecCoreTests/Fakes/Signals.swift`）は親が先に作り、
+      サブ作業 C（`RecordingPipeline`）も親が実装した**。A / B の 2 本だけを並列サブエージェントに出した。
+      根拠: `RecordingPipeline` は `DelayLine`（A）と `SilenceMeter`（B）の両方を使うため、A / B が揃うまで
+      ビルドも単体確認もできない（T3 turn 5 の「共有型は親が完成させる」と同じ理屈）。`Tuning` は A / B / C 全員が
+      参照し、`Signals` は 3 つのテスト全部が使うので、分配前に親が確定させた
+    - 確定した API（T5 / T8 はこの名前で配線する）:
+      `DelayLine(format:guardSeconds:)` / `heldFrames` / `push(_:emit:)` / `discard()` / `flush(emit:)`；
+      `SilenceMeter(sampleRate:)` / `ingest(_:gateOpen:)` / `snapshot` / `lastWindow` / `classify(dBFS:) -> Bool`；
+      `MeterWindow { dBFS, allZero, gateOpen }` / `MeterSnapshot { everNonZero, consecutiveAllZeroSeconds,
+      consecutiveSilentSeconds, audibleGateOpenWindows, totalWindows }`（秒は `Double`）；
+      `RecordingPipeline(format:writer:guardSeconds:meter:)` / `ingest(_:)` / `setGate(_:discardHeld:)` /
+      `finish() throws` / `gateOpen` / `firstWriteError: Error?` / `onWriteError: ((Error) -> Void)?` /
+      `writer`（`let`。`framesWritten` はここから読む） / `meter`（`let`）
+    - `RecordingPipeline` の契約の補足（PLAN 本文に無かった点を実装で確定）:
+      (1) **gate の初期値は開**（system / app モードは `setGate` を呼ばずに録り続ける）
+      (2) `ingest` は gate が閉じていても `meter.ingest` を通す（広告中の全ゼロも tap 故障の材料になる）
+      (3) `write` エラーは `firstWriteError` に畳んで `onWriteError` を 1 回だけ呼び、`push` / `flush` の
+          `emit` からは throw しない。よって `finish()` が throw するのは `writer.close()` の失敗だけで、
+          **flush が失敗しても `writer.close()` は必ず呼ばれる**
+    - `DelayLine` の実測:
+      (1) 保持量は「`guardFrames` を**超えている間**だけ最古を丸ごと押し出す」ので、`bufferFrames` ずつ
+          十分 push した後の保持は常に `(guardFrames / bufferFrames) * bufferFrames`（整数除算）。
+          48 kHz / guard 1.0 / 512 フレームなら 93 × 512 = 47616 フレーム（テストはこの式で期待値を出す）
+      (2) `guardSeconds == 0` は**コピーも保持もせず素通し**（system / app モードの経路）
+      (3) コピーは `AudioBufferList` 越しの `memcpy`（サンプル型に依存しない）。`frameCapacity` の下限は 1
+      (4) **`guardSeconds` の範囲チェック（`Tuning.adGuardRange`）は `DelayLine` に入れていない**。
+          負値を渡すと素通しになる。`--ad-guard` のパース側（T9）で弾くこと
+    - `SilenceMeter` の実測: **二乗和は Double で累算する**（`vDSP_vspdp` で float32 → Double に広げてから
+      `vDSP_svesqD`）。`Signals.constant(dBFS: -60.0)` の振幅 `Float(1e-3)` は真値より 4.1e-7 dB だけ上にしか
+      ないので、float32 累算（`vDSP_svesq`）では「ちょうど -60.0 は silent ではない」が丸め次第になる。
+      `allZero` は二乗和ではなく `vDSP_maxmgv`（最大絶対値 == 0）で別に測る（アンダーフロー対策）。
+      1 バッファが窓境界をまたぐ場合は `ingest` 内で区間分割する
 
 - [ ] T5: `TapRecorder`（HAL 抽象化・リスナー・冪等 stop・途中失敗の後始末）+ `FakeHAL`
   - 完了基準:
