@@ -1,6 +1,6 @@
 // TapRecorder.swift — tap / aggregate / IOProc / listener の寿命を 1 箇所に閉じ込める。
 //
-// 移行元は Legacy.swift の `Recorder`（+ `rec-probe` の `ProbeTap` / `makeProbeTap`）。
+// 移行元は単一ファイル版の `Recorder`（`git show main:rec.swift`。+ `rec-probe` の `ProbeTap` / `makeProbeTap`）。
 // 違いは 3 つ: (1) Core Audio 呼び出しを `AudioHAL` 越しにしてテストできるようにした、
 // (2) 中断の 5 種を `RecorderEvent` としてリスナーから配る、(3) 後始末の関数を 1 本にした。
 //

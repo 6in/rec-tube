@@ -1,6 +1,6 @@
 // HAL.swift — Core Audio HAL への薄い入口と、tap の作り方（`TapTarget`）。
 //
-// T2 で Legacy.swift から切り出した。ここは「HAL のプロパティを読む」「`CATapDescription` を組む」
+// T2 で単一ファイル版（`git show main:rec.swift`）から切り出した。ここは「HAL のプロパティを読む」「`CATapDescription` を組む」
 // までで、tap / aggregate / IOProc のライフサイクルは T5 の `TapRecorder` が持つ。
 //
 // 追従先（PLAN「追従先チェックリスト」）: HAL 呼び出しを足したら `AudioHAL` protocol（T5）、

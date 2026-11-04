@@ -1,76 +1,82 @@
-// rec — 入口。引数を読んでモードを選ぶだけ。
+// rec — 実行可能ターゲットの入口。引数を解釈して録音を 1 本組み、終了コードをプロセスに返すだけ。
 //
-// このファイルは T9 で `RecCore.CLI` + `RecordingSession` に置き換える。
-// 現状は移動元（`git show main:rec.swift` のトップレベル部分）をそのまま写したもので、
-// 終了コードは 0 / 1 の 2 種類しかない（PLAN「決めた事項」#3 の表は T3 以降で実装する）。
+// 役割分担:
+//   - 引数 → `Options`: `RecCore.parseArguments`（`Sources/RecCore/CLI.swift`）。ここは何も解釈しない
+//   - `--list` の表示 / `--app` の解決 / `-o` の分解: このファイル（`Options` と `RecordingSession` の橋渡し）
+//   - 実際の録音: `RecordingSession`（`Sources/RecCore/RecordingSession.swift`）
+//
+// 断言（PLAN P1）: **`exit()` を呼ぶのはこのファイルだけ**。`Sources/RecCore` 配下は終了コードを
+// 値で返すだけ（`RecError.code` / `RecordingSession` の `completion`）でプロセスを殺さない。
+// だからライブラリはそのままテストから呼べる。
 
 import Foundation
 import RecCore
 
-var app: String?
-var url: String?
-var outPath: String?
-var it = CommandLine.arguments.dropFirst().makeIterator()
-while let a = it.next() {
-    switch a {
-    case "--app": app = it.next()
-    case "--url": url = it.next()
-    case "-o": outPath = it.next()
-    case "--list":
-        do {
-            for p in try audioProcesses() where !p.bundle.isEmpty {
-                print("\(p.running ? "▶" : " ") \(p.bundle)")
-            }
-        } catch {
-            FileHandle.standardError.write(Data("error: \(error)\n".utf8))
-            exit(1)
-        }
-        exit(0)
-    default:
-        FileHandle.standardError.write(Data("unknown arg: \(a)\n".utf8))
-        exit(1)
+// MARK: - 橋渡し（`Options` → `RecordingSession` の入力）
+
+/// `--app X` を tap の対象に解決する（PLAN D4。一致判定は前方一致で、使い方は単一ファイル版と同じ）。
+///
+/// - `X` 自体を必ず先頭に置き、`X.` で始まるバンドル ID（ヘルパープロセス）を出現順で足す
+/// - `seed` は今見えているプロセス（`bundleIDs` だけで後から起動したプロセスを拾えるか未確認なので混ぜる）
+func resolveAppTarget(_ prefix: String) throws -> TapTarget {
+    let matched = try audioProcesses().filter { $0.bundle.hasPrefix(prefix) }
+    guard !matched.isEmpty else {
+        throw RecError(code: .usage,
+                       message: "'\(prefix)' に一致する音声プロセスがありません。再生後に --list で確認してください。")
     }
+    var bundleIDs = [prefix]
+    for proc in matched where proc.bundle.hasPrefix(prefix + ".") && !bundleIDs.contains(proc.bundle) {
+        bundleIDs.append(proc.bundle)
+    }
+    return .bundleIDs(bundleIDs, seed: matched.map(\.id))
 }
 
-let path: String = outPath ?? {
-    let f = DateFormatter()
-    f.dateFormat = "yyyyMMdd-HHmmss"
-    return "rec-\(f.string(from: Date())).m4a"
-}()
+/// `-o` の値を `SessionOutput` の 3 要素（親ディレクトリ / 名前 / 拡張子）に分ける。
+///
+/// `-o` があっても必ず `SessionOutput` 経由にする。`RecordingSession` が `reserveUniquePath` を
+/// 通すので、同名のファイルがあれば `-2` / `-3` … が付く。
+func sessionOutput(for path: String?) -> SessionOutput {
+    guard let path else {
+        // 既定: カレントディレクトリに `rec-<日時>.m4a`（名前は `RecordingSession` が決める）。
+        return SessionOutput(directory: URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
+                             explicitBaseName: nil,
+                             ext: "m4a")
+    }
+    let url = URL(fileURLWithPath: path)
+    return SessionOutput(directory: url.deletingLastPathComponent(),
+                         explicitBaseName: url.deletingPathExtension().lastPathComponent,
+                         ext: url.pathExtension.isEmpty ? "m4a" : url.pathExtension)
+}
+
+// MARK: - 本体
 
 do {
-    if let url {
-        // T8（turn 10）の暫定配線: `recordURL`（Legacy）を `RecordingSession` に置き換えた。
-        // 引数の検証（`Options` / `parseArguments`）と `-o` の分解、既定ファイル名の一本化は T9。
-        // ここでは `-o` があればその名前、無ければ probe のタイトル（`RecordingSession` が決める）を使う。
-        let outURL = URL(fileURLWithPath: path)
-        let session = RecordingSession(
-            mode: .url(url),
-            output: SessionOutput(
-                directory: outPath == nil
-                    ? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                    : outURL.deletingLastPathComponent(),
-                explicitBaseName: outPath == nil
-                    ? nil
-                    : outURL.deletingPathExtension().lastPathComponent,
-                ext: outPath == nil ? "m4a" : (outURL.pathExtension.isEmpty ? "m4a" : outURL.pathExtension)
-            ),
-            completion: { code in exit(code.rawValue) }
-        )
-        session.start()
-        dispatchMain()
-    } else if let app {
-        let targets = try audioProcesses().filter { $0.bundle.hasPrefix(app) }.map(\.id)
-        guard !targets.isEmpty else {
-            throw RecError(code: .usage,
-                           message: "'\(app)' に一致する音声プロセスがありません。再生後に --list で確認してください。")
+    let options = try parseArguments(Array(CommandLine.arguments.dropFirst()))
+
+    let mode: SessionMode
+    switch options.mode {
+    case .list:
+        // 録音しない。一覧を出して終わる（取得に失敗したら下の catch-all が `.coreAudio` にする）。
+        for proc in try audioProcesses() where !proc.bundle.isEmpty {
+            print("\(proc.running ? "▶" : " ") \(proc.bundle)")
         }
-        try recordLive(targets: targets, path: path)
-    } else {
-        try recordLive(targets: nil, path: path)
+        exit(ExitCode.ok.rawValue)
+    case .system:
+        mode = .system
+    case .app(let prefix):
+        mode = .app(try resolveAppTarget(prefix))
+    case .url(let url):
+        mode = .url(url)
     }
+
+    let session = RecordingSession(mode: mode,
+                                   output: sessionOutput(for: options.output),
+                                   adGuardSeconds: options.adGuard,
+                                   completion: { code in exit(code.rawValue) })
+    session.start()
+    // `completion` が `exit()` を呼ぶまでここで待つ（`dispatchMain()` は戻らない）。
+    dispatchMain()
 } catch let e as RecError {
-    // T3 で `RecError` が終了コードを持つようになったので、ここでそのまま使う（配線の一本化は T9）。
     FileHandle.standardError.write(Data("error: \(e.message)\n".utf8))
     exit(e.code.rawValue)
 } catch {

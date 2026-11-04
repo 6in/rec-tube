@@ -7,8 +7,8 @@
 // 断言: このファイルの外へ `NSError` / `errno` をそのまま出さない。
 // 呼び出し側（T5 の TapRecorder、T4 の出力先決定）は `RecError.code` だけ見れば終了コードが決まる。
 //
-// 追従先（PLAN「追従先チェックリスト」）: エンコード設定を変えたら README の「出力形式」と
-// `Sources/RecCore/Legacy.swift` の `LegacyRecorder.init`（T9 で消える）を合わせる。
+// 追従先（PLAN「追従先チェックリスト」）: エンコード設定を変えたら README の「出力形式」も合わせる
+// （エンコード設定を持つのは、この下の `AVAudioFileWriter.init` 1 か所だけ）。
 
 import AVFoundation
 import Foundation
@@ -28,7 +28,7 @@ public protocol AudioFileWriting: AnyObject {
 /// `AVAudioFile` 実装の `AudioFileWriting`（AAC 192 kbps）。
 ///
 /// `@unchecked Sendable`: 可変状態（`file` / `isOpen` / `framesWritten`）は IO キュー
-/// （`TapRecorder` の `rec.io`）上でだけ触る規約。このリポジトリの既存コード（`LegacyRecorder`）と同じ方針。
+/// （`TapRecorder` の `rec.io`）上でだけ触る規約。単一ファイル版の `Recorder`（`git show main:rec.swift`）と同じ方針。
 public final class AVAudioFileWriter: AudioFileWriting, @unchecked Sendable {
     public let url: URL
     public private(set) var framesWritten: AVAudioFramePosition = 0
@@ -40,7 +40,7 @@ public final class AVAudioFileWriter: AudioFileWriting, @unchecked Sendable {
     public init(url: URL, format: AVAudioFormat) throws {
         self.url = url
         do {
-            // 設定は Legacy の `LegacyRecorder.init` と同一（AAC 192 kbps）。
+            // 設定は単一ファイル版の `Recorder.init`（`git show main:rec.swift`）と同一（AAC 192 kbps）。
             file = try AVAudioFile(forWriting: url,
                                    settings: [AVFormatIDKey: kAudioFormatMPEG4AAC,
                                               AVSampleRateKey: format.sampleRate,

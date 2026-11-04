@@ -56,7 +56,7 @@ func dBFS(_ rms: Double) -> Double {
 // MARK: - 1 秒ごとのメータ
 
 /// IOProc が書き、メインスレッドが `snapshot()` で読む集計。
-/// `@unchecked Sendable`: 可変状態は `queue` 上でだけ触る規約（HAL.swift / Legacy.swift と同じ）。
+/// `@unchecked Sendable`: 可変状態は `queue` 上でだけ触る規約（HAL.swift / 単一ファイル版と同じ）。
 final class Meter: @unchecked Sendable {
     struct Snapshot {
         var frames: Int
@@ -104,7 +104,8 @@ final class Meter: @unchecked Sendable {
 
 // MARK: - tap + aggregate + IOProc
 
-/// Legacy の `Recorder` から「ファイルに書く」部分を抜いたもの。T5 の `TapRecorder` の下敷き。
+/// 単一ファイル版の `Recorder`（`git show main:rec.swift`）から「ファイルに書く」部分を抜いたもの。
+/// T5 の `TapRecorder` の下敷き。
 ///
 /// 作成の途中で失敗したら、作った分だけを逆順で壊してから throw する（RESEARCH §5.1 AudioCap）。
 final class ProbeTap {
