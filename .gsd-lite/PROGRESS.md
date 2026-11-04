@@ -128,3 +128,42 @@
   (5) 並列サブ作業は `swift build/test --scratch-path .build/<サブ作業名>` を使わせると衝突しない（T4 以降も同じ形で）。
   (6) 実機の許可（システム設定 > プライバシーとセキュリティ > システム音声の録音で iTerm2 を許可 → iTerm2 再起動）は
   まだ必要。T10 / T11 の verify-* に入る前に人の操作が要る
+
+## turn 6 — impl — T4 遅延線（広告ガード）・無音メータ・録音パイプライン
+- やったこと: `Tuning`（決めた事項 #4〜#8 の調整値を集約）と `Fakes/Signals`（テスト共有のバッファ生成）を
+  親が先に作り、サブ作業 A（`DelayLine`）と B（`SilenceMeter`）を並列サブエージェントに出し、
+  C（`RecordingPipeline`）は親が並行して実装した。`swift test` 55 本 green（T3 の 32 + DelayLine 9 +
+  SilenceMeter 9 + RecordingPipeline 5）、debug / release ビルド green、`rec --bogus` が 1 / `--list` が 0、
+  `rg 'rec\.swift:[0-9]'` が 0 件
+- 想定外: (1) **サブ作業 C は単独で検証できない**。`RecordingPipeline` は A の `DelayLine` と B の
+  `SilenceMeter` の両方を使うので、A / B が揃うまでビルドも単体確認もできない。→ **PLAN 訂正: 共有物
+  （`Tuning.swift` / `Fakes/Signals.swift`）は親が先に確定させ、C も親が実装する**（T3 turn 5 の
+  「共有型は親が完成させる」と同じ理屈。並列は A / B の 2 本になった）。
+  「テストを仕様表から独立に書かせる」構成は A / B で維持し、表と実装の食い違いは 0 件だった。
+  (2) **`Signals.constant(dBFS: -60.0)` の振幅 `Float(1e-3)` は真値より 4.1e-7 dB だけ上にしかない**。
+  RMS の二乗和を float32（`vDSP_svesq`）で累算すると丸め誤差が同じ 1e-7 dB 台になり、
+  「ちょうど -60.0 は silent ではない」のテストがコイントスになる。→ `vDSP_vspdp` で Double に広げてから
+  `vDSP_svesqD` で累算（誤差 1e-13 dB 台）。境界そのものは `classify(dBFS:)` を直接叩いて厳密に検証した。
+  (3) `allZero` は二乗和では判定できない（アンダーフローで 0 になり得る）。`vDSP_maxmgv`（最大絶対値 == 0）で別に測る。
+  (4) 遅延線の保持量は「`guardFrames` を**超えている間**だけ押し出す」ので
+  `(guardFrames / bufferFrames) * bufferFrames`（整数除算）になる。48 kHz / guard 1.0 / 512 フレームで 47616。
+  テストの期待値はこの式から出した（リテラルで書くと guard を変えた瞬間に壊れる）
+- 既存テストの期待値を変えた箇所: なし（既存 32 本は 1 本も変えていない。追加のみ）
+- やり直し: 0 回
+- 次への注意: (1) 次は **T5**（`AudioHAL` / `TapRecorder` / `FakeHAL`）。turn 4 の申し送りどおり
+  `start()` に `Tuning.tapStartTimeoutSeconds`（= 10 秒、`Tuning` に実装済み）の watchdog と
+  `TapAutoStart = false` を必ず入れる（許可が無いと `AudioDeviceCreateIOProcIDWithBlock` が無期限ブロックする）。
+  (2) T5 / T8 が配線する API 名は PLAN の「T4 の実測」に全部書いた。`framesWritten` は
+  `pipeline.writer.framesWritten` から読む（`writer` は `public let`）。メータは `pipeline.meter.snapshot` と
+  `pipeline.meter.lastWindow` の 2 口（1 回のアトミックな読みではないので、同じ IO キュー上で読むこと）。
+  (3) **`--ad-guard` の範囲チェックは `DelayLine` に入っていない**（負値を渡すと素通しになる）。
+  T9 の `parseArguments`（`--ad-guard -1` / `abc` / `11` 不可）で弾くこと。
+  (4) `RecordingPipeline` の gate の初期値は**開**。system / app モードは `setGate` を呼ばずに録り続ける。
+  URL モードだけが決めた事項 #10 の表に従って `setGate` を呼ぶ。
+  (5) `finish()` が throw するのは `writer.close()` の失敗だけ（flush 中の write エラーは `onWriteError` に
+  流れる）。T6 の `StopCoordinator` は `finish()` の例外を `.writeFailed` ではなく
+  `.outputUnavailable` 相当として扱えばよい。
+  (6) 並列サブエージェントには **`swift build/test --scratch-path .build/<サブ作業名>`** を使わせた。
+  今回も `.build` のロック待ちや担当外ファイルの巻き込みは起きなかった（T5 以降も同じ形で）。
+  (7) 実機の許可（システム設定 > プライバシーとセキュリティ > システム音声の録音で iTerm2 を許可 →
+  iTerm2 再起動）はまだ必要。T10 / T11 の verify-* に入る前に人の操作が要る
