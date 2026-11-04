@@ -683,7 +683,7 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
     `cat -t -e` でヒアドキュメント（`<<-'EOS'`）の本文と終端がタブ字下げであることを確認して代替した。
     verify / T11 で verify-*.sh の構文を機械的に見たいなら `.claude/settings.json` に `Bash(bash -n:*)` を足す（人の操作）
 
-- [ ] T11: README 完成・実機検証スクリプト・final-check の仕上げ・文書の整合
+- [x] T11: README 完成・実機検証スクリプト・final-check の仕上げ・文書の整合
   - 完了基準:
     - `README.md`: 使い方（4 モードと `-o` / `--ad-guard`）、ビルド / テスト（T1）、**許可 3 種**（システム音声 / オートメーション / Apple Events からの JavaScript）と
       tmux の注意（RESEARCH §2.5: 許可はターミナルアプリに付く。tmux 内で出ない場合は tmux の外で 1 回実行し `tmux kill-server` 後に再起動）、`tccutil reset` の手順、

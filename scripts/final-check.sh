@@ -43,12 +43,54 @@ echo "== 追従チェック =="
 if rg -n 'rec\.swift:[0-9]' Sources README.md; then
 	fail "rec.swift:NN の参照が残っている（履歴参照は git show main:rec.swift を使う）"
 fi
-# TODO(T11): 下の検査を有効にする（対象ファイルがまだ無いので T1 では入れない）
-#   - ExitCode の case 数 == README「終了コード」表の行数
-#   - CLI オプション（--ad-guard 等）が CLI.swift と README の両方にある
-#   - README に許可 3 種（NSAudioCaptureUsageDescription / オートメーション / Apple Events）の記述
-#   - ls scripts/verify-*.sh の本数 == README「検証」節の一覧行数
-#   - Tuning. 経由以外の調整値のハードコードが無い
+# ExitCode の case 数と README「終了コード」表の行数が一致する（**数は直書きしない**）。
+exit_cases="$(rg -c '^    case .* = [0-9]+$' Sources/RecCore/ExitCode.swift || echo 0)"
+readme_codes="$(rg -c '^\| [0-9]' README.md || echo 0)"
+echo "  ExitCode の case: $exit_cases 個 / README「終了コード」表: $readme_codes 行"
+# 正規表現が壊れて両方 0 になったときに「一致」で通ってしまわないようにする。
+[ "$exit_cases" -gt 0 ] || fail "ExitCode の case を 1 つも拾えていない（検査の正規表現が壊れている）"
+[ "$exit_cases" -eq "$readme_codes" ] ||
+	fail "ExitCode の case 数 ($exit_cases) と README「終了コード」表の行数 ($readme_codes) が違う"
+
+# CLI オプション（--ad-guard）が CLI.swift と README の両方にある。
+rg -q -- '--ad-guard' Sources/RecCore/CLI.swift || fail "Sources/RecCore/CLI.swift に --ad-guard が無い"
+rg -q -- '--ad-guard' README.md || fail "README.md に --ad-guard が無い（使い方の節）"
+
+# README に許可 3 種（システム音声 / オートメーション / Apple Events からの JavaScript）の記述がある。
+readme_perms="$(rg -c 'NSAudioCaptureUsageDescription|オートメーション|Apple Events' README.md || echo 0)"
+echo "  README の許可 3 種の記述: $readme_perms 行（3 以上）"
+[ "$readme_perms" -ge 3 ] || fail "README の許可の記述が $readme_perms 行しかない（3 以上が必要）"
+
+# 検証スクリプトの本数と README「検証」節の一覧行数が一致する（**数は直書きしない**）。
+verify_count="$(ls -1 scripts/verify-*.sh 2>/dev/null | wc -l | tr -d '[:space:]')" || verify_count=0
+readme_verify="$(rg -c '^- `scripts/verify-' README.md || echo 0)"
+echo "  scripts/verify-*.sh: $verify_count 本 / README の一覧: $readme_verify 行"
+[ "$verify_count" -gt 0 ] || fail "scripts/verify-*.sh が 1 本も無い"
+[ "$verify_count" -eq "$readme_verify" ] ||
+	fail "検証スクリプトの本数 ($verify_count) と README の一覧行数 ($readme_verify) が違う"
+
+# 調整値（秒数・dBFS・比率）が Sources/RecCore/Tuning.swift の外に直書きされていない。
+#
+# 検査するリテラルは、実際に rg を回して「今は Tuning.swift にしか無い」と確認できたものだけ:
+#   -60.0     … Tuning.silenceDBFS
+#   -50.0     … Tuning.toneAudibleDBFS
+#   0.7       … Tuning.adResumeRewindSeconds
+#   3.0       … Tuning.toneAdDominanceRatio
+#   ad-showing… Tuning.adShowingSelector
+# 1.2（Tuning.ssaiDurationRatio）は外した: SessionPolicy.swift のコメントに
+# 「#8 の条件は `dur > len × 1.2`」として出てくる。rg はコメントと数値リテラルを区別できないので
+# 入れると永久に落ちる（値そのものは Tuning.ssaiDurationRatio を経由している）。
+# Sources/rec-probe は対象外: 440 / 1000 Hz・12 / 4 秒は検証素材の寸法で、
+# Tuning（製品コード RecCore の調整値置き場）の管轄外（PLAN T10 の訂正欄）。
+if rg -n -e '-60\.0' -e '-50\.0' -e '0\.7' -e '3\.0' -e 'ad-showing' Sources \
+	-g '!Tuning.swift' -g '!rec-probe/**'; then
+	fail "調整値が Tuning.swift の外に直書きされている（Tuning.<名前> を経由すること）"
+fi
+
+# 単一ファイル版 rec.swift はリポジトリ直下から移動済み（T1 の git mv）。
+if ls rec.swift >/dev/null 2>&1; then
+	fail "リポジトリ直下に rec.swift がある（T1 で Sources へ移動したはず）"
+fi
 
 echo "== cli =="
 .build/debug/rec --list >/dev/null || fail "--list が exit 0 にならない"

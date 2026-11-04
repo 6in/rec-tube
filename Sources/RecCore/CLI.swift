@@ -16,7 +16,10 @@
 
 import Foundation
 
-/// 使い方（`--help` と usage エラーの両方で出す本文）。
+/// 使い方（usage エラーの `message` に必ず丸ごと含まれる本文）。
+///
+/// **`--help` / `-h` は未定義**（未知のオプションとして `.usage` に落ち、この本文つきで exit 1 になる）。
+/// README「既知の制約」にも同じことを書いてある。
 public let usageText = """
 rec — macOS の音声を m4a に録音する
 
