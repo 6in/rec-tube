@@ -294,3 +294,57 @@
   iTerm2 を許可 → iTerm2 再起動）はまだ必要。T10 / T11 の verify-* に入る前に人の操作が要る。
   Chrome の **JS 許可**（表示 > 開発/管理 > Apple Events からの JavaScript）も未確認のまま
   （無人ターンでタブを開く副作用を避けた。verify-permission.sh / T10 で確かめる）
+
+## turn 10 — impl — T8 `--url` の状態機械（`SessionPolicy`）と `RecordingSession`
+- やったこと: 共有物（`SessionAction.swift` の 9 case と `Messages` の警告文 2 本）を親が先に確定させ、
+  A（`SessionPolicy` 実装）/ B（`SessionPolicyTests` を決めた事項 #10 の表から独立に記述）/
+  C（`RecordingSession` + テスト）の **3 本を並列サブエージェントに出した**。統合して検証:
+  `swift test` **175 本 green**（既存 123 + 新規 52）、debug / release ビルド green、
+  新しい `--scratch-path` での `swift build --build-tests` で warning 0、
+  `rec --bogus` が 1 / `rec --list` が 0、`rg 'rec\.swift:[0-9]' Sources README.md` が 0 件
+- 想定外: (1) **決めた事項 #10 の表は「行の羅列」で評価順を書いていなかった**。表のまま実装すると
+  `main playing` + id 違い（openGate か nextVideo か）、`main ended`（gate 操作か stop か）で
+  解釈が割れる。→ 親が仕様文として評価順を確定し（`gone` → 開始前 → 開始後は
+  nextVideo → ended → 全ゼロ 10 秒 → gate 操作 1 つ → SSAI → 無音、**stop が当たったら
+  戻り値は `[.stop]` 1 要素だけ**）、3 者に同じ文で渡した。PLAN の T8 実測欄に記録。
+  **表形式の仕様は「行の優先順位」を書かないと並列実装で割れる**
+  (2) **`len == 0` で SSAI 警告が毎回出るという #8 の不備を A が見つけた**（`dur > 0 × 1.2` は
+  常に真）。A は固定文言どおり「契約外なので実装せず報告」で止め、親が仕様の不備と判断して
+  `len > 0` を足し、PLAN #8 と `SessionPolicyTests` に 1 本ずつ反映した。
+  **「契約外は実装せず報告」の指示が、仕様バグの報告経路として機能した**
+  (3) 決めた事項 #2 の「Chrome の音声プロセスが running になるまで待つ」ループは**作らなかった**。
+  いつ録り始めるかの唯一の正は #10 の表（完全な probe 応答が条件）で、旧実装の待ちループは
+  同じことを別の手段でやっていたから。seed は `.startRecording` の時点で見える Chrome を使う
+  （bundleIDs 単独でも tap は張れる = T2 の実測）。PLAN の T8 実測欄に記録
+  (4) C がリテラルで書いた overload の 1 行を親が `Messages.overload` に移した
+  （定型文は `Messages` に集める既存方針。C には `Messages.swift` を触らせていないので報告で上がってきた）
+  (5) 親が `Legacy.swift` の `recordURL` を削ると `main.swift` の `--url` が宙に浮くので、
+  `RecordingSession` への暫定配線を親が入れた（本配線は T9）。**T8 の対象ファイルに
+  `main.swift` が入っていなかったのは PLAN の漏れ**（訂正として記録）
+- 既存テストの期待値を変えた箇所: **なし**（既存 123 本は 1 本も触っていない。追加のみ。
+  親が足した 1 本は新規ファイル `SessionPolicyTests.swift` 内の `len == 0` のケース）
+- やり直し: 0 回（並列の 3 本はどれも一発で契約を満たした。**B の 48 本は A の実装に 1 行も
+  手を入れずそのまま green** = API サーフェスと仕様解釈の食い違い 0 件。これで 4 ターン連続。
+  親の統合での修正は overload の 1 行の移動と `len > 0` の追加と `main.swift` の配線だけ）
+- 次への注意: (1) 次は **T9**（`CLI.swift` / `main.swift` の一本化 / `--app` の bundleIDs 化 / Legacy 削除）。
+  並列サブ作業は PLAN どおり A（`CLI.swift` + `CLITests`）/ B（`main.swift` + `Legacy.swift` 削除）の 2 本。
+  **共有型は無い**（`Options` は A だけが使う）ので親の先出しは不要。
+  (2) **T9 が使う API は PLAN「T8 の実測」の『確定した API』に全部書いた**。特に
+  `SessionOutput(directory:explicitBaseName:ext:)` は「`-o` を親ディレクトリ / 名前 / 拡張子に
+  分解したもの」を受ける形で、分解するのは T9 の仕事。`main.swift` には turn 10 の**暫定配線**が
+  入っているので、T9 はこれを `parseArguments` 経由に置き換える（`outPath == nil` の三項演算子が
+  3 つ並んでいる箇所がそれ）。
+  (3) `exit(` は現状 `Sources/rec/main.swift`（5 箇所）・`Sources/rec-probe/main.swift`（3 箇所）・
+  `Sources/RecCore/Legacy.swift`（2 箇所）にある。T9 の完了基準「`rg -n 'exit\(' Sources` が
+  `Sources/rec/main.swift` のみ」は **`Legacy.swift` を消せば満たせるが `rec-probe` が残る**。
+  rec-probe は別の実行可能ターゲットなので、T9 はこの基準を「`RecCore` に `exit(` が無いこと」と
+  読み替えて PROGRESS に PLAN 訂正を残すのが素直（判断は T9 のターンで）。
+  (4) `RecordingSession` は `signals: []` + `FakePowerSource` + `requestStop(_:)` でテストできる。
+  T9 の統合テスト（実バイナリに `kill -INT`）は本物のシグナル経路を通るので、
+  **`installSigint`（Legacy）と `SignalWatcher` が二重に張られないよう、Legacy 削除と同時に確かめる**。
+  (5) 実機の**システム音声の取得**の許可（システム設定 > プライバシーとセキュリティ > システム音声の録音で
+  iTerm2 を許可 → iTerm2 再起動）はまだ必要。T9 の統合テスト（`-o` を付けて 3 秒録って `kill -INT` →
+  `afinfo` が duration を返す）は**録音が実際に走るので許可が要る**。許可が無いと
+  `TapRecorder` の watchdog が 10 秒で `.coreAudio` を返して終わるので、
+  **その項目は「未実施」として PROGRESS に書いて T11 のスクリプトに委ねる**（PLAN T9 にその指示がある）。
+  Chrome の **JS 許可**（表示 > 開発/管理 > Apple Events からの JavaScript）も未確認のまま
