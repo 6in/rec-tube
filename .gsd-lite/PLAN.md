@@ -638,7 +638,7 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
       1 つも無い。`reserveUniquePath` は「tap の開始に成功して format が確定した後」なので、
       tap が作れない場合は予約自体が起きない（T8 契約の補足 (2) のとおり）
 
-- [ ] T10: ローカル検証ページ・トーン生成・Goertzel 判定器・`scripts/verify-adtest.sh`
+- [x] T10: ローカル検証ページ・トーン生成・Goertzel 判定器・`scripts/verify-adtest.sh`
   - 完了基準:
     - `Sources/RecCore/ToneAnalyzer.swift`: `func goertzelPower(_ samples: [Float], sampleRate: Double, hz: Double) -> Double`、
       `struct ToneVerdict { adWindows: Int; mainSeconds: Double; silentSeconds: Double; totalSeconds: Double }`、
@@ -662,6 +662,26 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
   - 並列サブ作業:
     - A: ToneAnalyzer + ToneFiles + テスト（対象: `ToneAnalyzer.swift`, `ToneFiles.swift`, `ToneAnalyzerTests.swift`）
     - B: adtest.html + verify-adtest.sh + rec-probe のサブコマンド（対象: `Tests/Fixtures/adtest.html`, `scripts/verify-adtest.sh`, `Sources/rec-probe/main.swift`。A の関数名は上記で固定）
+  - **PLAN 訂正（turn 12 / T10 の実装）**:
+    - 「ad エネルギーが main の 3 倍超かつ -50 dBFS 超」の 2 値は `ToneAnalyzer.swift` に直書きせず
+      **`Tuning.toneAdDominanceRatio = 3.0` / `Tuning.toneAudibleDBFS = -50.0`** として追加した
+      （根拠: Tuning.swift の「秒数・dBFS・比率を他のファイルに直書きしない」規約と追従先チェックリストの
+      「調整値を変える」行。`windowSeconds` の既定 0.1 は API 契約で署名に書くと決めたのでそこだけ直書き）
+    - `rec-probe tones` の 440 / 1000 Hz・12 / 4 秒は `Sources/rec-probe/main.swift` に直書きのまま
+      （`Tuning` は `RecCore`（製品コード）の調整値置き場で、検証素材の寸法は道具側の値。
+      `adtest.html` のコメントと対で保つ）
+  - **T10 の実機結果（turn 12）: 未実施**。`swift run rec-probe tap system 2` が
+    turn 11 と同じく **`aggregate created` の次の `AudioDeviceCreateIOProcIDWithBlock` で 10 秒の watchdog に当たり exit 8**
+    （= システム音声の取得の許可が未取得。人の操作が必要）。録音できないので `scripts/verify-adtest.sh` は走らせていない。
+    代わりに**録音以外の全段を実データで確認した**: `tones` が `main.wav` / `ad.wav` を生成 →
+    `analyze main.wav --expect-main 12` が `{"adWindows":0,"mainSeconds":12.0,"silentSeconds":0,"totalSeconds":12}` / exit 0 →
+    `analyze ad.wav --expect-main 12` が `adWindows=40` で exit 1 → `analyze main.wav --silence` が exit 0 →
+    **`xcrun afconvert -f m4af -d aac -b 192000` で作った `.m4a` でも同じ verdict / exit 0**
+    （= verify-adtest.sh の step 4 が読む形式で判定が成立する）。残るのは「Chrome で adtest.html を鳴らして録る」部分だけ
+  - **`bash -n` は無人ターンから実行できない**（`bash -n scripts/verify-adtest.sh` / `zsh -n …` ともに権限拒否。
+    allowlist の `Bash(bash scripts/:*)` は「prefix + 空白」でしか当たらない）。T10 では
+    `cat -t -e` でヒアドキュメント（`<<-'EOS'`）の本文と終端がタブ字下げであることを確認して代替した。
+    verify / T11 で verify-*.sh の構文を機械的に見たいなら `.claude/settings.json` に `Bash(bash -n:*)` を足す（人の操作）
 
 - [ ] T11: README 完成・実機検証スクリプト・final-check の仕上げ・文書の整合
   - 完了基準:

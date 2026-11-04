@@ -403,3 +403,58 @@
   `--help` / `-h` は未定義のまま（`.usage` に落ちて usage 全文が出るので実用上は読める）。
   `-o` / `--ad-guard` の重複指定の勝敗、裸の位置引数の扱いも未定義。いずれも PLAN の契約に無いので
   実装せず、T11 の README を書くときに「未定義」のままでよいか判断する
+
+## turn 12 — impl — T10 ローカル検証ページ・トーン生成・Goertzel 判定器・verify-adtest.sh
+
+- やったこと: PLAN どおり **A**（`ToneAnalyzer.swift` + `ToneFiles.swift` + テスト 5 本）と
+  **B**（`Tests/Fixtures/adtest.html` + `scripts/verify-adtest.sh` + `rec-probe` の `tones` / `analyze`）の
+  2 本を並列サブエージェントに出し、親は先に共有の調整値（`Tuning.toneAdDominanceRatio = 3.0` /
+  `toneAudibleDBFS = -50.0`）だけ足してから投げた。統合して検証: **`swift test` 195 本 green**（既存 190 + 新規 5）、
+  debug / release ともビルド warning 0。実データで `tones` → `analyze` を通し、
+  `main.wav` は `{"adWindows":0,"mainSeconds":12.0,"silentSeconds":0,"totalSeconds":12}` / exit 0、
+  `ad.wav` は `adWindows=40` で exit 1、`--silence` は非ゼロで exit 0。
+  **`xcrun afconvert -f m4af -d aac -b 192000` で作った `.m4a` でも同じ verdict / exit 0** を確認
+  （= verify-adtest.sh の step 4 が読む形式で判定が成立する）
+- 想定外: (1) **実機（`scripts/verify-adtest.sh`）は未実施**。`swift run rec-probe tap system 2` が turn 11 と同じく
+  `aggregate created` の次の `AudioDeviceCreateIOProcIDWithBlock` で 10 秒 watchdog に当たり **exit 8**
+  （システム音声の取得の許可が未取得。人の操作が必要）。PLAN T10 の指示どおり BLOCKED にせず、
+  録音以外の全段を実データで確認して続行した。残っているのは「Chrome で adtest.html を鳴らして録る」部分だけ
+  (2) **`bash -n` が無人ターンから実行できない**（`bash -n scripts/verify-adtest.sh` も `zsh -n …` も権限拒否。
+  allowlist の `Bash(bash scripts/:*)` は「完全一致」か「prefix + 空白」でしか当たらない）。
+  B も同じ壁に当たっていた。代替として `cat -t -e` でヒアドキュメント（`<<-'EOS'`）の本文と終端が
+  **タブ字下げ**であることを確認した（`<<-` はタブだけを剥がすので、ここがスペースだと構文エラーになる）。
+  **`cat -A` は BSD cat に無い（`-t -e` を使う）**
+  (3) **`AVAudioFile.read(into:frameCount:)` はファイル終端で呼ぶと throw する**（0 フレームを返して終わるのではない）。
+  A が「`frameLength < windowFrames` なら break」で端数窓を落とす実装にしていて、ちょうど割り切れるファイルで
+  終端読みが走り `.outputUnavailable` になった。`framePosition` と `length` で先に止める形に修正済み。
+  **今後 `AVAudioFile` を直接読むコードを足すときは同じ罠を踏む**
+- 既存テストの期待値を変えた箇所: **なし**（既存 190 本は 1 本も触っていない。追加のみ 5 本）
+- やり直し: 0 回（並列の 2 本とも契約を満たして戻り、親の統合での修正は 0 件。これで 6 ターン連続。
+  親がやったのは `Tuning` への定数追加・PLAN 訂正の記録・実データでの確認だけ。
+  (3) は A が自分のターン内で見つけて直したもの）
+- 次への注意: (1) 次は **T11**（README 完成・verify スクリプト 5 本・final-check 仕上げ）。PLAN どおり
+  A（`README.md`）/ B（`scripts/*`）の 2 本に割れる。**T11 の README には T10 から 3 つ宿題が来ている**:
+  ① 検証スクリプト一覧に `verify-adtest.sh` を載せる（`final-check.sh` の `TODO(T11)` に
+  「`ls scripts/verify-*.sh` の本数 == README の一覧行数」の検査が予定されている。T11 時点では 6 本）、
+  ② 「既知の制約」に **「許可が無い環境では録音開始前の中断がシグナルで止まらない（10 秒待たされる）」**を 1 行
+  （turn 11 の実測）、③ ローカル検証ページの使い方と**自動再生の段階的対処**（`file://` → `python3 -m http.server 8765` →
+  Chrome の `AutoplayAllowlist`。`AutoplayAllowlist` は人の操作で、impl / verify は実行しない）
+  (2) **許可はまだ降りていない**（turn 11・12 と 2 回実測）。T11 の verify-permission / verify-signals /
+  verify-youtube も同じ理由で実行できない見込み。人の操作: **システム設定 > プライバシーとセキュリティ >
+  「画面とシステムオーディオの録音」で iTerm2 を許可 → iTerm2 を再起動**。
+  T11 は「実行できるものは実行し、できないものは『未実施』と理由を書く」でよい（PLAN T11 の完了基準にその旨あり）
+  (3) **verify スクリプトの構文チェックを機械的にやりたいなら `.claude/settings.json` に `Bash(bash -n:*)` が必要**
+  （人の操作）。無ければ T11 でも `cat -t -e` と目視になる。`timeout --preserve-status -s INT <秒> <コマンド>` は
+  無人ターンから通る（turn 11 の申し送り）ので、録音を伴わない部分の試走にはそれを使う
+  (4) `adtest.html` は**まだ一度も Chrome で開いていない**（録音ができないので probe JS との噛み合わせが未検証）。
+  許可が降りた後の最初の実機は `scripts/verify-adtest.sh`（= 一番安いループ）から始めるのがよい。
+  probe JS は `v.paused && !v.ended` で `play()` を呼ぶので、広告明けの `src` 差し替え直後
+  （`loadedmetadata` で `currentTime = 4` を入れる前）に本編の先頭が一瞬鳴る競合がありうる
+  （混入は 440 Hz 側なので `adWindows` には効かず、`mainSeconds` のずれも許容 1.0 秒に収まる見込み）
+- 契約外の提案（サブエージェントからの報告。採用しなかったもの）:
+  ① `ToneVerdict` に `adSeconds`（= `adWindows × windowSeconds`）の computed property、
+  ② `goertzelPower` の `sampleRate <= 0` / Nyquist 超過のガード、③ `writeTone` の 2ch・フェード、
+  ④ `.m4a` / 2ch の読み取りテストケース（契約のテスト一覧に無い。`.m4a` は親が実データで確認済み）、
+  ⑤ `tones` の 440 / 1000 Hz・12 / 4 秒を `Tuning` に移す案（却下。`Tuning` は `RecCore` = 製品コードの
+  調整値置き場で、検証素材の寸法は道具側の値。`adtest.html` のコメントと対で保つ）。
+  採用した逸脱は 1 つだけ: `verify-adtest.sh` の `mkdir -p "$SCRATCH"`（scratch が無いときの失敗を読めるようにする 1 行）
