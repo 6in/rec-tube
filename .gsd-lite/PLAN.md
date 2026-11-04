@@ -556,7 +556,7 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
           「いつ録り始めるか」の唯一の正（#10）で、表は完全な probe 応答を条件にしているため
           （旧実装の待ちループは同じことを別の手段でやっていた）。bundleIDs 単独でも tap は張れる（T2 の実測）
 
-- [ ] T9: CLI の配線（`main.swift` の一本化、3 モード復元、`--app` の bundleIDs 化、Legacy 削除）
+- [x] T9: CLI の配線（`main.swift` の一本化、3 モード復元、`--app` の bundleIDs 化、Legacy 削除）
   - 完了基準:
     - `Sources/RecCore/CLI.swift`: `struct Options`（`mode: .list | .system | .app(String) | .url(String)`、`output: String?`、`adGuard: Double`（既定 `Tuning.adGuardSeconds`））、
       `func parseArguments(_ args: [String]) throws -> Options`（未知の引数・値なし・`--ad-guard` が数値でない／負／10 超 → `RecError(.usage)`。`--url` の値は `URL(string:)` でパースでき
@@ -565,7 +565,8 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
       それ以外は `RecordingSession` を作り `completion` で `exit(code.rawValue)`、`dispatchMain()`。`catch` は stderr に `error: <message>` と出して `error.code`（`RecError` 以外は 8）。
       `-o` 無しの既定名: url は probe のタイトル（`sanitizeFileName` が nil なら `defaultBaseName`）、他は `defaultBaseName`。`-o` も `reserveUniquePath` を通す
     - `--app X`: `TapTarget.bundleIDs([X] + 現在の一覧で `X.` を前置に持つ ID, seed: それらのプロセス)`（D4。使い方は変えない）。一致なしは `.usage` で rec.swift:304 と同文
-    - `Sources/RecCore/Legacy.swift` を削除。`rg -n 'exit\(' Sources` の結果が `Sources/rec/main.swift` のみ。`rg -n 'Legacy' Sources Tests` が 0
+    - `Sources/RecCore/Legacy.swift` を削除。`rg -n '^[^/]*\bexit\(' Sources/RecCore` が 0 件
+      （**turn 11 訂正**。元は「`rg -n 'exit\(' Sources` が `Sources/rec/main.swift` のみ」。理由は下の実測欄）。`rg -n 'Legacy' Sources Tests` が 0
     - ユニット: `parseArguments` の表（`--bogus`、`--url` 値なし、`--url 'not a url'`、`--url 'https://'`、`--url 'file:///x.html?v=1'` 可、`--ad-guard -1` / `abc` / `11` 不可、`--ad-guard 0` 可）
     - 統合（このターンで実行。TCC / オートメーション許可が無い項目は PROGRESS に「未実施」と書いて T11 のスクリプトに委ねる）:
       `.build/debug/rec --bogus` → exit 1；`.build/debug/rec --url 'not a url'` → exit 1 で stderr に「URL」；`.build/debug/rec -o .gsd-lite/logs/rec-cli-hardening/scratch/t9.m4a`
@@ -582,6 +583,60 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
   - 並列サブ作業:
     - A: CLI.swift + CLITests（対象: `CLI.swift`, `CLITests.swift`）
     - B: main.swift の配線と Legacy 削除（対象: `main.swift`, `Legacy.swift`）
+  - **T9 の実測（turn 11）**:
+    - **PLAN 訂正: 完了基準の「`rg -n 'exit\(' Sources` の結果が `Sources/rec/main.swift` のみ」は
+      そのままでは満たせない**。理由は 2 つで、どちらも実害がない:
+      (1) `Sources/rec-probe/main.swift` に実呼び出しが 3 件ある（**別の実行可能ターゲット**なので
+      「ライブラリが prosess を殺さない」という P1 の趣旨には反しない）、
+      (2) `Sources/RecCore` の 3 ファイル（`CLI.swift` / `RecordingSession.swift` / `ExitCode.swift`）に
+      **「`exit()` を呼ばない」と書いた散文コメント**が引っかかる。
+      → 基準を「**`RecCore` に `exit(` の実呼び出しが 1 件もない**」に読み替え、検査コマンドを
+      コメント行を除く形に変えた: **`rg -n '^[^/]*\bexit\(' Sources/RecCore` が 0 件**
+      （`^[^/]*` で「`exit(` より前に `/` が無い行」= `//` や `///` のコメントでない行に限る）。
+      参考: `rg -n '^[^/]*\bexit\(' Sources` は `Sources/rec/main.swift` 4 件 +
+      `Sources/rec-probe/main.swift` 3 件のみ。**T11 の `final-check.sh` はこの形で書く**
+    - **PLAN 訂正: サブ作業の割り方**。`CLI.swift`（`Options` / `parseArguments` / `usageText`）は
+      **親が実装**し、並列に出したのは A'（`CLITests.swift` を仕様表から独立に書く。`CLI.swift` を
+      読ませない）と B（`main.swift` の配線 + `Legacy.swift` 削除 + `Legacy` 参照コメントの掃除）の 2 本。
+      根拠: turn 10 の申し送りは「共有型は無い（`Options` は A だけが使う）」としていたが、
+      **B が `parseArguments` / `Options` を呼ぶので実際には共有型だった**。T5 / T6 / T7 / T8 と
+      同じ「共有型は親が先に完成させ、テストは契約から独立に書かせる」形に寄せた（5 ターン連続で有効）
+    - **PLAN 訂正: `Legacy` 参照コメントの掃除は 6 ファイルに及ぶ**（対象ファイル欄に無かった）:
+      `AudioFileWriter.swift`（3 箇所）/ `ScriptRunner.swift` / `ChromeController.swift` / `HAL.swift` /
+      `TapRecorder.swift` / `rec-probe/main.swift`（2 箇所）。すべてコメント文面だけで、コードは無変更。
+      言い換えの規約は「消えたファイルを指す参照は履歴参照（`git show main:rec.swift`）にする。
+      `rec.swift:NN` の行番号は新たに書かない」（追従先チェックリストの最終行と同じ方針）
+    - 確定した API（T10 / T11 はこの名前で使う）:
+      `usageText: String`（`let`。usage エラーの `message` にも**必ず丸ごと含まれる**）；
+      `Options(mode:output:adGuard:)` / `Options.Mode { list, system, app(String), url(String) }`（`Equatable`）；
+      `parseArguments(_ args: [String]) throws -> Options`（`args` は**プログラム名を除いた**引数列。
+      throw するのは `RecError(code: .usage, ...)` **だけ**）；
+      `main.swift` のトップレベル関数 `resolveAppTarget(_ prefix:) throws -> TapTarget` / `sessionOutput(for:) -> SessionOutput`
+    - 契約の補足（実装で確定）:
+      (1) **モードの指定が複数あったら最後に来たものが勝つ**（単一ファイル版と同じ。`--list` も同列に扱う）
+      (2) usage エラーの `message` は `"<個別の説明>\n\n<usageText>"`。`main.swift` は
+          `error: <message>` と出すだけで usage の出し分けをしない
+      (3) `--ad-guard` は `Double` に変換でき**有限**で `Tuning.adGuardRange`（0〜10）に入る値だけ通す
+          （`inf` / `nan` も弾く）。`--url` 以外のモードでも**パースは通る**（無視されるだけ）
+      (4) `--app X` の bundleIDs は `[X] + （現在の一覧で "X." 前置のバンドル ID、出現順・重複なし）`、
+          seed は `X` 前方一致で見えているプロセスの `id`。一致 0 件は `.usage` で単一ファイル版と同文
+      (5) `-o` を指定しても必ず `SessionOutput` 経由 = `reserveUniquePath` を通るので**上書きしない**
+    - **統合テストの実施結果**: `.build/debug/rec --bogus` → **exit 1**（stderr に usage 全文）；
+      `--url 'not a url'` → **exit 1**（stderr に「URL として解釈できません」）；`--list` → **exit 0**（16 行）；
+      `--app com.example.nope` → **exit 1**（「一致する音声プロセスがありません」）。
+      **`-o` を付けた実録音・`kill -INT/TERM/HUP` の 130/143/129・`afinfo` の duration・`t9-2.m4a` の連番は
+      未実施**（システム音声の取得の許可が無いため。PLAN T9 の指示どおり T11 の `verify-signals.sh` に委ねる）
+    - **許可の状態を実測（turn 11）**: `timeout --preserve-status -s INT 3 .build/debug/rec -o <scratch>/turn-011-t9.m4a`
+      → **exit 8**。3 秒時点の SIGINT は効かず、**10 秒後に `TapRecorder` の watchdog が
+      `.coreAudio` で落ちて `Messages.systemAudioPermission` が出た**（T2 turn 4 の実測と同じ経路。
+      許可はまだ降りていない）。設計どおりの挙動の裏付け: `.system` モードは `run()` が
+      `beginRecording` を**セッションキュー上で同期に**呼ぶので、`recorder.start()` が
+      ブロックしている 10 秒間は `SignalWatcher` のハンドラ（同じキュー）が走れない。
+      → **許可が無い環境では「録音開始前の中断」はシグナルで止められない**（10 秒待たされる）。
+      実害は小さいが T11 の README「既知の制約」に 1 行書く
+    - **空ファイルが残らないこと（P4）はこの経路でも確認**: 上の exit 8 のあと scratch に `.m4a` は
+      1 つも無い。`reserveUniquePath` は「tap の開始に成功して format が確定した後」なので、
+      tap が作れない場合は予約自体が起きない（T8 契約の補足 (2) のとおり）
 
 - [ ] T10: ローカル検証ページ・トーン生成・Goertzel 判定器・`scripts/verify-adtest.sh`
   - 完了基準:

@@ -349,3 +349,57 @@
   **その項目は「未実施」として PROGRESS に書いて T11 のスクリプトに委ねる**（PLAN T9 にその指示がある）。
   Chrome の **JS 許可**（表示 > 開発/管理 > Apple Events からの JavaScript）も未確認のまま
 - 承認待ち（ループ計測・turn 10）: 1 件 — Bash: rec
+
+## turn 11 — impl — T9 CLI の配線（`main.swift` の一本化、`--app` の bundleIDs 化、Legacy 削除）
+- やったこと: 共有型（`CLI.swift` の `Options` / `parseArguments` / `usageText`）を親が実装し、
+  A'（`CLITests.swift` を仕様表から独立に記述。`CLI.swift` は読ませない）と
+  B（`main.swift` の本配線 + `Legacy.swift` 削除 + `Legacy` 参照コメントの掃除 6 ファイル）の
+  **2 本を並列サブエージェントに出した**。統合して検証: `swift test` **190 本 green**（既存 175 + 新規 15）、
+  debug / release ビルドともに warning 0、`rg 'Legacy' Sources Tests` と
+  `rg 'rec\.swift:[0-9]' Sources README.md` と `rg '^[^/]*\bexit\(' Sources/RecCore` がいずれも 0 件、
+  `rec --bogus` / `--url 'not a url'` / `--app <不一致>` が exit 1、`--list` が exit 0。
+  README の「使い方」節も下書き（4 モード・`-o`・`--ad-guard`・ファイル名の規則）
+- 想定外: (1) **turn 10 の申し送り「T9 に共有型は無い（`Options` は A だけが使う）」は誤り**だった。
+  B（`main.swift`）が `parseArguments` と `Options` を呼ぶので、A と B の境界をまたぐ共有型だった。
+  → T5〜T8 と同じ「共有型は親が先に完成させ、テストは契約から独立に書かせる」形に寄せた（5 ターン連続で有効）。
+  **「共有型が無い」の判定は『どのファイルが置くか』ではなく『どのサブ作業が参照するか』で行う**
+  (2) **完了基準の `rg -n 'exit\(' Sources` が `Sources/rec/main.swift` のみ」は満たせない**
+  （turn 10 の申し送りが予告していたとおり）。実呼び出しは `rec-probe`（別の実行可能ターゲット）に 3 件、
+  それ以外は **「`exit()` を呼ばない」と書いた散文コメント**が 3 ファイルで引っかかる。
+  → 基準を「`RecCore` に実呼び出しが 0 件」に読み替え、検査を
+  **`rg -n '^[^/]*\bexit\(' Sources/RecCore`**（コメント行を除く形）に変えた。PLAN に訂正として記録。
+  **「禁止事項を文書に書くと、その文書が禁止事項の grep に引っかかる」**類の罠
+  (3) **許可が無い環境では「録音開始前の中断」がシグナルで止まらない**ことを実測で発見。
+  `timeout -s INT 3 rec -o …` が exit 130 ではなく **10 秒後に exit 8**（watchdog）になる。
+  `.system` モードは `run()` が `beginRecording` をセッションキュー上で同期に呼ぶので、
+  `recorder.start()` がブロックしている間は同じキューの `SignalWatcher` ハンドラが走れない。
+  設計どおりの帰結なので直さず、T11 の README「既知の制約」に 1 行書く宿題にした
+  (4) `Legacy` 参照コメントが**コードではなく 6 ファイルのコメントに散っていた**（PLAN の対象ファイル欄に無し）。
+  `rg 'Legacy' Sources Tests` を 0 にするには全部言い換えが必要で、B の担当範囲を 8 ファイルに広げた
+- 既存テストの期待値を変えた箇所: **なし**（既存 175 本は 1 本も触っていない。追加のみ 15 本）
+- やり直し: 0 回（並列の 2 本はどちらも一発で契約を満たした。**A' の 15 本（展開 37 ケース）は
+  親の `CLI.swift` に 1 行も手を入れずそのまま green** = 仕様表と実装の食い違い 0 件。これで 5 ターン連続。
+  親の統合での修正は 0 件で、やったのは PLAN 訂正の記録と README の下書きだけ）
+- 次への注意: (1) 次は **T10**（`ToneAnalyzer` / `ToneFiles` / `adtest.html` / `verify-adtest.sh`）。
+  PLAN どおり A（`ToneAnalyzer.swift` + `ToneFiles.swift` + テスト）/ B（`adtest.html` +
+  `verify-adtest.sh` + `rec-probe` のサブコマンド）の 2 本。**B は A の関数名を呼ぶだけ**なので
+  共有型の先出しは不要だが、`goertzelPower` / `analyze` / `writeTone` / `ToneVerdict` の署名は
+  PLAN T10 の完了基準で固定されているので、そのまま抜き書きして両方に渡すこと
+  (2) **T10 の実機項目（`scripts/verify-adtest.sh` の実行）はシステム音声の取得の許可が要る**。
+  turn 11 で実測したとおり**許可はまだ降りていない**（`rec` が 10 秒の watchdog で exit 8 になり、
+  `Messages.systemAudioPermission` が出る）。人の操作が必要:
+  **システム設定 > プライバシーとセキュリティ > 画面とシステムオーディオの録音 で iTerm2 を許可 →
+  iTerm2 を再起動**。許可が無いままなら PLAN T10 の指示どおり「未実施」と理由を PROGRESS に書いて続行する
+  （BLOCKED にしない）。Chrome の **JS 許可**（表示 > 開発/管理 > Apple Events からの JavaScript）も未確認
+  (3) `--url` の実機確認（`verify-youtube.sh`）は T11。T10 は `file://` のローカルページなので
+  Chrome のオートメーション許可と JS 許可だけで足りる（システム音声の許可は録音部分で必要）
+  (4) **`rec-probe` には `exit(` の実呼び出しが 3 件ある**（別ターゲットなので P1 の対象外）。
+  T10 で `rec-probe tones` / `analyze` を足すときも `exit` は `rec-probe/main.swift` 内に留めること
+  (5) `timeout`（`/Users/ohya/.local/bin/timeout`）と `gtimeout` が使える。
+  **`timeout --preserve-status -s INT <秒> <コマンド>` は無人ターンから 1 コマンドで通る**
+  （allowlist の `Bash(timeout:*)` に当たる）。`sleep` + `kill` を自前で組むより確実なので、
+  T11 の verify スクリプトを無人ターンから試すときはこの形を使う
+- 契約外の提案（サブエージェントからの報告。採用しなかったもの）:
+  `--help` / `-h` は未定義のまま（`.usage` に落ちて usage 全文が出るので実用上は読める）。
+  `-o` / `--ad-guard` の重複指定の勝敗、裸の位置引数の扱いも未定義。いずれも PLAN の契約に無いので
+  実装せず、T11 の README を書くときに「未定義」のままでよいか判断する
