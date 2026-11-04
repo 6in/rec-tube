@@ -215,3 +215,4 @@
   ビルド以外の確認（`otool` / `grep` / 文書）に使う。
   (7) 実機の許可（システム設定 > プライバシーとセキュリティ > システム音声の録音で iTerm2 を許可 →
   iTerm2 再起動）はまだ必要。T10 / T11 の verify-* に入る前に人の操作が要る
+- 承認待ち（ループ計測・turn 7）: 5 件 — Bash: Hxcrun, Bash: find, Bash: git, Bash: grep, Bash: gsd-lite-loop.sh
