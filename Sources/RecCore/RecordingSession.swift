@@ -19,7 +19,9 @@
 //
 // 例外が 1 つだけある: **スリープ通知の経路は `coordinator.claim` + その場で同期に `finish`**。
 // ack（`PowerWatcher` の `defer`）を返した後はシステムが寝るので、`writer.close()` を ack より
-// 先に終わらせる必要がある（`run()` の 3 のコメント）。
+// 先に終わらせる必要がある（`run()` の 3 のコメント）。その代わり、この経路だけ **`completion` を
+// `sessionQueue.async` に回す**（`completion` は `exit()` を呼ぶので、同期に呼ぶと ack より先に
+// プロセスが死ぬ。`finish` の 5 のコメント / E20）。
 //
 // キューの規約（破ると自己デッドロックする）:
 //   - セッションキュー `rec.session`（直列）: タイマー・policy・`chrome` の呼び出し・`finish`
@@ -223,6 +225,10 @@ public final class RecordingSession: @unchecked Sendable {
         // セッションキューへ投げ直すと、ハンドラは投げるだけで戻ってしまい close が ack の後になる。
         // ここはすでにセッションキュー上（`register(queue: sessionQueue)`）なので、`finish` を
         // 直に呼んでもキューの規約は破らない。
+        //
+        // **その代わり `finish` は `.sleep` のときだけ `completion` を 1 つ後ろの dispatch item に
+        // 回す**（E20）。`completion` は `exit()` を呼ぶので、同期に呼ぶと ack より先にプロセスが
+        // 死ぬ。`teardown()` の `powerWatcher?.stop()` も `PowerWatcher` 側で ack の後ろにずれる。
         let watcher = PowerWatcher(source: powerSource, queue: sessionQueue) { [weak self] reason in
             guard let self, self.coordinator?.claim(reason) == true else { return }
             self.finish(reason)
@@ -552,7 +558,18 @@ public final class RecordingSession: @unchecked Sendable {
         }
 
         // 5. ちょうど 1 回。
-        completion(code)
+        //
+        // **スリープ経路だけ `sessionQueue.async`**（E20）: この経路は `PowerWatcher` の handler から
+        // 同期に呼ばれていて、ack（`IOAllowPowerChange`）が返るのは handler が戻った後の `defer`。
+        // `completion` は `Sources/rec/main.swift` で `exit()` を呼ぶので、ここで同期に呼ぶと
+        // **ack より先にプロセスが死んで ack が一度も返らない**（スリープが最大 30 秒ブロックされる）。
+        // 1 つ後ろの dispatch item に回せば「close → ack → exit」の順になる。
+        // 他の経路は handler から呼ばれていないので同期のまま（`fail` も同じ）。
+        if reason == .sleep {
+            sessionQueue.async { [self] in completion(code) }
+        } else {
+            completion(code)
+        }
     }
 
     /// 起動失敗の経路（セッションキュー上。冪等）。`finish` と同じ旗を共有する。
@@ -575,6 +592,10 @@ public final class RecordingSession: @unchecked Sendable {
     /// 監視（poll タイマー・無音警告タイマー・シグナル・スリープ）と tap を止める。
     ///
     /// これ以降に降ってくる停止要求は `StopCoordinator` が捨てる（旗は呼び出し側が先に立てている）。
+    ///
+    /// スリープ経路ではここが `PowerWatcher` の handler の中なので、`powerWatcher?.stop()` の
+    /// **実際の解除は ack の後ろにずれる**（`PowerWatcher.stop()` の規約。E20）。ここでは何も
+    /// 気にしなくてよいが、`stop()` の呼び出しを消すと ack が返らなくなるので消さない。
     private func teardown() {
         timer?.cancel()
         timer = nil

@@ -561,6 +561,52 @@ struct SessionPolicyTests {
                 "停止した step で警告の旗が立っていた: \(later)")
     }
 
+    // MARK: - 3d-0'. E21: `playErr` は端末に出す前に無害化される（F4）
+
+    @Test("ページが playErr に改行や ESC を入れても警告の 1 行に制御文字が残らない")
+    func autoplayWarningSanitizesPageSuppliedName() {
+        // `playErr` はページの JS が決める文字列（`HTMLMediaElement.play` を差し替えれば任意）。
+        // JSON の文字列には生の制御文字を置けないので、**エスケープのまま**渡してデコーダに
+        // 戻してもらう（`\\n` → 改行 / `\\u001b` → ESC / `\\u0007` → BEL）。ページはこの形で送れる。
+        let outcome = probe("main", "playing", playErr: "x\\n保存先: /tmp/evil\\u001b]0;t\\u0007")
+        guard case let .result(decoded) = outcome, let raw = decoded.playErr else {
+            Issue.record("probe が .result にデコードできていない: \(outcome)")
+            return
+        }
+        // 自己検査: デコードの時点では制御文字が入っている（無害化するのは Swift 側だけ）。
+        #expect(raw.contains("\n") && raw.contains("\u{1B}") && raw.contains("\u{07}"),
+                "テストの入力に制御文字が入っていない: \(Array(raw.unicodeScalars))")
+
+        var policy = startedPolicy()
+        let actions = policy.step(probe: outcome, meter: meter(), now: at(1))
+        guard actions.count == 2, case let .warn(line) = actions[1] else {
+            Issue.record("警告が 1 本付いていない: \(actions)")
+            return
+        }
+
+        // ESC / BEL / CR は 1 つも残らない（OSC・ANSI・行の上書きを注入できない）。
+        #expect(!line.contains("\u{1B}"), "ESC が残っている: \(Array(line.unicodeScalars))")
+        #expect(!line.contains("\u{07}"), "BEL が残っている: \(Array(line.unicodeScalars))")
+        #expect(!line.contains("\r"), "CR が残っている: \(Array(line.unicodeScalars))")
+        // 改行は**文言そのものの数のまま**（ページが行を増やせない）。
+        let benign = Messages.autoplayRejected(name: Self.autoplayErrorName)
+        #expect(line.filter { $0 == "\n" }.count == benign.filter { $0 == "\n" }.count,
+                "ページ由来の改行で行が増えている: \(line)")
+        // 偽の「保存先: …」の行も作れない。
+        let injected = line.split(separator: "\n", omittingEmptySubsequences: false)
+            .contains { $0.hasPrefix("保存先:") }
+        #expect(!injected, "偽の保存先の行が作れている: \(line)")
+
+        // 無害な名前は**そのまま**通る（E10 の文言は変わらない）。
+        var plain = startedPolicy()
+        let plainActions = plain.step(probe: probe("main", "playing", playErr: Self.autoplayErrorName),
+                                      meter: meter(),
+                                      now: at(1))
+        #expect(plainActions == [.openGate, .warn(benign)],
+                "無害な playErr が加工された: \(plainActions)")
+        #expect(benign.contains(Self.autoplayErrorName), "文言に名前が入っていない: \(benign)")
+    }
+
     @Test("main playing（直前も main）→ [.openGate]")
     func mainPlayingAfterMainOpensGate() {
         var policy = startedPolicy()

@@ -273,12 +273,17 @@ public struct SessionPolicy: Sendable {
     /// **録音は止めない**（#10 の表に停止の行は無い。ユーザーに「タブで再生ボタンを押せ」と
     /// 伝えるだけ）。`playErr` の中身は見ない: 非 nil なら出す（空文字列の特別扱いもしない）のが
     /// 契約で、`name` が取れない場合に JS 側が `PlayError` を入れてくれる。
+    ///
+    /// **ただし端末に出す前に `sanitizeForTerminal` を通す**（F4 / E21）。`playErr` はページの JS が
+    /// 上書きできる文字列（`HTMLMediaElement.play` を差し替えて `Promise.reject({name: "…"})` を
+    /// 返せば任意）で、改行で偽の「保存先: …」行、ESC で端末のタイトル変更や OSC を注入できる。
+    /// 「中身は見ない」は**判断に使わない**という意味で、無害化はする。
     private mutating func autoplayWarning(for result: ProbeResult) -> SessionAction? {
         guard !didWarnAutoplayRejected, let playErr = result.playErr else {
             return nil
         }
         didWarnAutoplayRejected = true
-        return .warn(Messages.autoplayRejected(name: playErr))
+        return .warn(Messages.autoplayRejected(name: sanitizeForTerminal(playErr)))
     }
 
     /// SSAI 警告（決めた事項 #8）。1 セッションに 1 回だけ。

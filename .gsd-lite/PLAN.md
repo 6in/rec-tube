@@ -902,7 +902,7 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
       システム音声の取得の許可が要るのでこのターンでは回していない（メモの【verify 前に必要な人の操作】のまま）。
       `afplay` の存在（`/usr/bin/afplay`）と `Tests/Fixtures/main.wav` が 440 Hz・12 秒であること（`afinfo`）は確認済み
 
-- [ ] F4: スリープ経路の ack の回帰と、ページ由来文字列の無害化（verify round 2 の指摘。VERIFICATION round 2 §4。期待結果は表 E20 / E21）
+- [x] F4: スリープ経路の ack の回帰と、ページ由来文字列の無害化（verify round 2 の指摘。VERIFICATION round 2 §4。期待結果は表 E20 / E21）
   - 完了基準:
     - **E20（F1 で入った回帰）**: いまの実経路は `PowerWatcher.receive` → `handler(.sleep)` → `RecordingSession.finish` →
       `teardown()` → `powerWatcher?.stop()` → `IOKitPowerSource.unregister()`（`rootPort = 0`・`IOServiceClose`・`IONotificationPortDestroy`）
@@ -933,6 +933,24 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
     `Tests/RecCoreTests/RecordingSessionTests.swift`, `Tests/RecCoreTests/SessionPolicyTests.swift`, `Tests/RecCoreTests/OutputPathTests.swift`
   - 依存: なし（F1〜F3 は完了済み）
   - 並列サブ作業: なし（2 件とも小さく、E20 は fake とテストと実装を同じ人が順に触る必要がある）
+  - **PLAN 訂正（turn 19 / F4 の実測）**:
+    1. **E20 の直し方は (b) の変形で、直す場所は 2 か所**（旧: 「(a) か (b) のどちらか 1 つ」）。
+       `RecordingSession.teardown` から `powerWatcher?.stop()` を外す形（素の (b)）は採らない:
+       完了基準が要求する `PowerWatcherTests` の 1 本（「handler の中で `stop()` を呼んでも有効な ack が 1 回」）は
+       **`PowerWatcher` 自身が守る**契約なので、`PowerWatcher.stop()` 側で直した
+       （`WillSleep` の配送中に来た `stop()` は `registered` だけその場で倒し、実際の `unregister` は
+       ack の後・`queue.async` で行う＝ port のコールバックの中から `IODeregisterForSystemPower` /
+       `IONotificationPortDestroy` を呼ばない）。
+    2. **(b) の括弧書き「`exit` が先なら解除は不要なので『止めない』だけでもよい」は誤り**（旧: そのまま）。
+       `completion` は `Sources/rec/main.swift` で `exit()` を呼ぶため、`finish` から同期に呼ぶと
+       **ack より先にプロセスが死んで `IOAllowPowerChange` が一度も返らない**（解除の有無とは別の問題）。
+       そこで `finish` は `reason == .sleep` のときだけ `completion` を `sessionQueue.async` に回し、
+       実経路を「close → ack → exit」の順にした。根拠: `main.swift:74` の `completion: { code in exit(code.rawValue) }`。
+    3. **E21 のテストの断言「`.warn` の文字列に `\n` が無い」→「改行の数が `Messages.autoplayRejected` の文言のまま」**。
+       `Messages.autoplayRejected` の本文自体が 2 行（改行 1 個）なので、旧の断言は実装に関わらず落ちる。
+       「ページが行を増やせない」ことを改行の数と「`保存先:` で始まる行が無い」ことで断言した（`\u{1B}` / `\u{07}` / `\r` は 0 個のまま断言）。
+       また旧文の「`"NotAllowedError"` はそのまま含まれる」は例の入力に含まれないので、`playErr = "NotAllowedError"` の
+       素通しを別の断言にした。
 
 ## 決めた事項
 

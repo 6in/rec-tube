@@ -14,6 +14,9 @@
 //   6. `stop()` は `unregister` を呼び、2 回呼んでも `unregister` は 1 回だけ（冪等）
 //   7. `deinit` だけでも `unregister` される
 //   8. `register` が throw したら `start()` は `RecError(code: .coreAudio, …)` を投げる
+//   9. **handler の中で `stop()` を呼んでも `WillSleep` の有効な ack が 1 回**（F4 / E20）。
+//      `RecordingSession.teardown` がこの形で呼ぶ。解除が ack より先に走ると本物では
+//      `IOAllowPowerChange` が届かない（`FakePowerSource` が `droppedAcknowledges` で数える）
 //
 // 書き方の約束:
 //   - 通知は `FakePowerSource.send` から**登録されたキューに非同期で載る**ので、断言の前に
@@ -168,6 +171,52 @@ struct PowerWatcherTests {
         watcher = nil
         #expect(waitUntil { source.count(.unregister) == 1 },
                 "deinit で unregister が呼ばれていません: \(source.log)")
+    }
+
+    // MARK: - handler の中からの stop（契約 9。F4 / E20）
+
+    /// handler から自分自身の `stop()` を呼ぶために watcher を入れておく箱。
+    private final class WatcherHolder: @unchecked Sendable {
+        var watcher: PowerWatcher?
+    }
+
+    @Test("handler の中で stop() を呼んでも WillSleep の有効な ack が 1 回返り、解除は ack の後")
+    func acknowledgesEvenWhenHandlerStopsWatcher() throws {
+        let source = FakePowerSource()
+        let queue = makeQueue("test.rec.power.stop-in-handler")
+        let box = ReasonBox()
+        let holder = WatcherHolder()
+        // `RecordingSession.teardown` と同じ形: 停止の後始末の中で `stop()` を呼ぶ。
+        let watcher = PowerWatcher(source: source, queue: queue) { reason in
+            box.append(reason, mark: nil)
+            holder.watcher?.stop()
+        }
+        holder.watcher = watcher
+        try watcher.start()
+
+        #expect(source.send(messageType: PowerNotification.systemWillSleep, argument: 7))
+        // 1 回目の drain は通知の配送まで。解除はその `defer` の中で改めて `queue` に載るので、
+        // もう 1 回空にしてから断言する。
+        #expect(drain(queue), "通知の配送が 2 秒で終わりませんでした")
+        #expect(drain(queue), "解除の後始末が 2 秒で終わりませんでした")
+
+        #expect(box.all == [.sleep], "handler に届いた理由が違います: \(box.all)")
+        // 本体: ack は**有効なまま** 1 回だけ。捨てられた ack は 0 件。
+        #expect(source.acknowledgeCount(messageType: PowerNotification.systemWillSleep) == 1,
+                "WillSleep の有効な ack が 1 回ではありません: \(source.log)")
+        #expect(source.droppedAcknowledges == 0,
+                "登録が解けた後に ack が呼ばれました（本物では IOAllowPowerChange が届かない）: \(source.log)")
+        // 順序: register → ack → unregister（解除が ack より後ろにずれている）。
+        #expect(source.log == [.register,
+                               .acknowledge(messageType: PowerNotification.systemWillSleep, argument: 7),
+                               .unregister],
+                "ack と unregister の順序が違います: \(source.log)")
+        #expect(!source.isRegistered, "stop() の後なのに登録が残っています")
+
+        // 冪等は保つ（handler の中の 1 回で数え終わっている）。
+        watcher.stop()
+        #expect(source.count(.unregister) == 1,
+                "stop() の 2 回目で unregister が増えました: \(source.log)")
     }
 
     // MARK: - 登録の失敗（契約 8）

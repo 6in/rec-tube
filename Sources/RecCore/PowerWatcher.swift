@@ -5,6 +5,14 @@
 // 1 つでもあると、システムのスリープが最大 30 秒ブロックされる（QA1340 / RESEARCH §2.2）。
 // 実装では ack を `defer` に置いて、handler がどんな経路を通っても漏れないようにしている。
 //
+// **`defer` だけでは足りない（F4 / E20 の回帰）**: handler は停止の後始末の中で `stop()` を呼ぶ
+// （`RecordingSession.teardown`）。`stop()` が同期に `unregister` してしまうと、`defer` の
+// `acknowledge` が届く先（`IOKitPowerSource.rootPort`）が既に 0 になっていて **ack が捨てられる**。
+// そこで `WillSleep` の handler を走らせている間に来た `stop()` は、**解除を ack の後ろへ回す**
+// （`unregisterAfterAcknowledge`）。解除自体は `queue.async` に載せて、
+// `IODeregisterForSystemPower` / `IONotificationPortDestroy` を**その port のコールバックの中から
+// 呼ばない**ようにする（QA1340 の後始末の順序）。`stop()` の「2 回呼んでも 1 回」は変わらない。
+//
 // handler（`.sleep`）を呼ぶのは `WillSleep` のときだけ。`CanSystemSleep` は「スリープしていいか」の
 // 問い合わせ（ユーザー操作ではなくアイドルによる要求）で、録音を止める理由にはしない
 // （止めるのは実際に寝る `WillSleep`）。`HasPoweredOn` は復帰の通知で、ack も handler も要らない。
@@ -193,6 +201,10 @@ public final class PowerWatcher: @unchecked Sendable {
     private let lock = NSLock()
     /// `register` が成功していて、まだ `unregister` していない。
     private var registered = false
+    /// `WillSleep` の handler（+ `defer` の ack）を走らせている間だけ true。
+    private var deliveringWillSleep = false
+    /// その間に `stop()` が来た。ack を返した後に `queue` 上で解除する。
+    private var unregisterAfterAcknowledge = false
 
     public init(source: PowerSource = IOKitPowerSource(),
                 queue: DispatchQueue,
@@ -222,14 +234,36 @@ public final class PowerWatcher: @unchecked Sendable {
     }
 
     /// 監視をやめる（`deinit` からも呼ぶ。冪等）。
+    ///
+    /// **`WillSleep` の handler の中から呼ばれた場合だけ、解除が後ろにずれる**（E20）。
+    /// `defer` の `acknowledge` が有効な ack として届くように、解除は ack の後・この通知の
+    /// コールバックが終わってから `queue` 上で行う。「監視をやめた」こと自体（`registered`）は
+    /// その場で確定するので、戻った直後に 2 回目を呼んでも `unregister` は増えない。
     public func stop() {
-        let shouldUnregister = lock.withLock { () -> Bool in
-            guard registered else { return false }
-            registered = false
-            return true
+        /// `stop()` が今やること。
+        enum Next {
+            /// 登録されていない（または既に `stop()` 済み）。
+            case nothing
+            /// その場で解除する。
+            case now
+            /// ack の後に `receive` の `defer` が解除する。
+            case afterAcknowledge
         }
-        guard shouldUnregister else { return }
-        source.unregister()
+        let next: Next = lock.withLock {
+            guard registered else { return .nothing }
+            registered = false
+            guard !deliveringWillSleep else {
+                unregisterAfterAcknowledge = true
+                return .afterAcknowledge
+            }
+            return .now
+        }
+        switch next {
+        case .nothing, .afterAcknowledge:
+            break
+        case .now:
+            source.unregister()
+        }
     }
 
     /// 通知 1 件を処理する（`queue` 上）。
@@ -239,7 +273,25 @@ public final class PowerWatcher: @unchecked Sendable {
             // **ack は `defer`**。handler がどこを通っても ack が漏れない（QA1340）。
             // handler を先に走らせるのは、ack を返した後はシステムが寝てしまうため
             // （handler は停止要求を投げるだけで、ブロックしない契約）。
-            defer { source.acknowledge(notification) }
+            lock.withLock { deliveringWillSleep = true }
+            defer {
+                // 1. ack（ここまで `unregister` を遅らせたので有効な ack になる。E20）
+                source.acknowledge(notification)
+                // 2. handler の中で `stop()` が来ていたら、ここで解除を予約する。
+                let shouldUnregister = lock.withLock { () -> Bool in
+                    deliveringWillSleep = false
+                    let pending = unregisterAfterAcknowledge
+                    unregisterAfterAcknowledge = false
+                    return pending
+                }
+                if shouldUnregister {
+                    // **この通知のコールバックの中では解除しない**（`IODeregisterForSystemPower` /
+                    // `IONotificationPortDestroy` を port のコールバックから呼ばない）。`queue` は
+                    // 通知を配っているキューなので、この dispatch item が終わってから走る。
+                    // `self` を強く捕まえるのは、解除の前に `deinit` させないため（1 回だけの async）。
+                    queue.async { self.source.unregister() }
+                }
+            }
             handler(.sleep)
         case PowerNotification.canSystemSleep:
             // 「寝ていいか」の問い合わせ。rec は拒否しない（録音中でも寝させる）が、

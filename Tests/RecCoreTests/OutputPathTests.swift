@@ -165,6 +165,58 @@ func sanitizeReplacesControlCharacters(control: String) {
     #expect(sanitizeFileName("a\(control)b") == "a_b")
 }
 
+// MARK: - sanitizeForTerminal（F4 / E21）
+
+/// `Cc` / `Cf` / `Zl` / `Zp` はすべて `_` になる。
+///
+/// `sanitizeFileName` との違いは **`Cf`（ZWJ・RLO 等）も落とす**こと（端末の表示を偽装されるより
+/// 絵文字の連結が壊れるほうがましな場所。`sanitizeFileName` は逆の判断）。
+@Test(
+    "sanitizeForTerminal replaces control, format and separator scalars",
+    arguments: ["\u{0}", "\n", "\r", "\u{1B}", "\u{07}", "\u{7F}", "\u{85}",
+                "\u{200D}", "\u{202E}", "\u{2028}", "\u{2029}"]
+)
+func sanitizeForTerminalReplacesDisallowedScalars(control: String) {
+    #expect(sanitizeForTerminal("a\(control)b") == "a_b")
+}
+
+/// `/` と `:` は残す（ファイル名ではないので無害。消すと原文が読めなくなる）。
+@Test("sanitizeForTerminal keeps path punctuation")
+func sanitizeForTerminalKeepsPathPunctuation() {
+    #expect(sanitizeForTerminal("a/b:c") == "a/b:c")
+}
+
+/// 境界: 空文字列・64 バイトちょうど・64 バイト超・マルチバイト文字・結合文字。
+@Test("sanitizeForTerminal truncates at 64 UTF-8 bytes without splitting characters")
+func sanitizeForTerminalBoundaries() {
+    // 空文字列はそのまま空文字列（`nil` に落とす契約ではない）。
+    #expect(sanitizeForTerminal("") == "")
+
+    // 64 バイトちょうどは切らない。
+    let exact = String(repeating: "a", count: 64)
+    #expect(sanitizeForTerminal(exact) == exact)
+    // 65 バイトは 64 バイトに切る。
+    #expect(sanitizeForTerminal(exact + "b") == exact)
+
+    // 4 バイト文字（🎵）は 16 個（64 バイト）で止まる。17 個目を割らない。
+    let truncatedNotes = sanitizeForTerminal(String(repeating: "🎵", count: 17))
+    #expect(truncatedNotes == String(repeating: "🎵", count: 16))
+    #expect(truncatedNotes.utf8.count == 64)
+
+    // 基底 + 結合文字のクラスタが 64 バイト目をまたぐとき、結合文字だけを切り離さない。
+    // 素材は `"a" × 61`（61 バイト）+ (ア + U+0301)（3 + 2 = 5 バイト）= 66 バイト。
+    // **スカラ単位で切る実装なら** `ア`（3 バイト）だけ入って 64 バイトになり、結合文字が落ちる。
+    // Character 単位で切る契約なら、クラスタ全体が入らないので `"a" × 61` で止まる。
+    let cluster = String(repeating: "a", count: 61) + "ア\u{301}"
+    #expect(cluster.utf8.count == 66, "素材の前提が崩れている: \(cluster.utf8.count)")
+    #expect(sanitizeForTerminal(cluster) == String(repeating: "a", count: 61))
+
+    // 長い文字列に制御文字が混ざっていても、切った結果に制御文字は残らない。
+    let long = String(repeating: "x", count: 70) + "\u{1B}"
+    #expect(!sanitizeForTerminal(long).contains("\u{1B}"))
+    #expect(sanitizeForTerminal(long).utf8.count == 64)
+}
+
 // MARK: - defaultBaseName
 
 /// 固定の `Date` に対して `rec-` + 8 桁 + `-` + 6 桁の形になる。

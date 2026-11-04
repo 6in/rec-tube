@@ -7,6 +7,12 @@
 //   - **`register` を失敗させられる**（`registerError`）
 //   - **本物のロックを持つ**（NSLock）。通知は `register` で渡されたキュー上で配るので、
 //     記録の読み出しはテストのスレッドと別スレッドから同時に来る
+//   - **本物の「登録が解けたら ack は届かない」制約を持つ**（F4 / E20）。`IOKitPowerSource.acknowledge`
+//     は `guard connect != 0 else { return }` で、`unregister`（`rootPort = 0` / `IOServiceClose`）の
+//     後に呼ばれた ack を**捨てる**。fake がこれを再現していなかったため、「スリープ経路で
+//     `IOAllowPowerChange` が呼ばれない」回帰が E11 のテストに映らなかった。
+//     そこで `unregister` 後（または `register` 前）の ack は `log` に**記録せず**、
+//     `droppedAcknowledges` に数える。`log` / `acknowledgeCount` に残るのは**有効な ack だけ**
 //
 // `send` は **`register` で渡されたキューに `async` で載せる**（直列キューなら送った順に届く）。
 // 本物（`IONotificationPortSetDispatchQueue`）と同じく「handler は queue 上で呼ばれる」を再現するため。
@@ -46,9 +52,15 @@ final class FakePowerSource: PowerSource, @unchecked Sendable {
     private var calls: [Call] = []
     private var queue: DispatchQueue?
     private var handler: HandlerBox?
+    private var droppedAcks = 0
 
-    /// 呼ばれた順の一覧。
+    /// 呼ばれた順の一覧。**有効な ack だけ**が入る（登録が解けた後の ack は `droppedAcknowledges`）。
     var log: [Call] { lock.withLock { calls } }
+    /// 登録が解けた後（または `register` の前）に呼ばれて捨てられた ack の回数。
+    ///
+    /// 本物では `IOAllowPowerChange` が呼ばれないので、システムのスリープが最大 30 秒ブロックされる。
+    /// つまりこれが 1 以上なら「ack を返さない経路」がある。
+    var droppedAcknowledges: Int { lock.withLock { droppedAcks } }
     /// `log` のうち `call` の件数。
     func count(_ call: Call) -> Int { lock.withLock { calls.filter { $0 == call }.count } }
     /// `messageType` に ack を返した回数。
@@ -99,6 +111,11 @@ final class FakePowerSource: PowerSource, @unchecked Sendable {
 
     func acknowledge(_ notification: PowerNotification) {
         lock.withLock {
+            // 本物と同じ: 登録が解けていたら ack は届かない（`guard connect != 0`）。
+            guard handler != nil else {
+                droppedAcks += 1
+                return
+            }
             calls.append(.acknowledge(messageType: notification.messageType,
                                       argument: notification.argument))
         }

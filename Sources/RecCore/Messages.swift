@@ -137,6 +137,9 @@ public enum Messages {
     /// 自動再生が拒否された（probe の `playErr` が非 nil）ときの 1 行。1 セッションに 1 回だけ。
     ///
     /// - Parameter name: `HTMLMediaElement.play()` の reject の `name`（`NotAllowedError` など）。
+    ///   **ページ由来なので呼び出し側が `sanitizeForTerminal` を通してから渡す**（F4 / E21。
+    ///   通すのは `SessionPolicy.autoplayWarning` の 1 か所）。ここでは加工しない
+    ///   （この型は文言を組むだけ、という役割分担を崩さない）。
     public static func autoplayRejected(name: String) -> String {
         """
         ブラウザが自動再生を拒否しました（\(name)）。録音は続けますが、本編が始まらない場合は
