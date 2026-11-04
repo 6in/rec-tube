@@ -13,3 +13,4 @@
   `Bash(swift:*)` と `DEVELOPER_DIR=...` を含む形が要る。plan の最初のタスクで通らなければ BLOCKED にして allowlist 追加を依頼する。
   (2) リポジトリ外のファイルは Bash/Read とも読めないので、SDK ヘッダが要るときは Web ミラーを使う。
   (3) plan は RESEARCH.md §9 を先に読み、§7 の検証方法を完了基準に写す。§8-6 の bundleIDs プローブを最初の実機タスクにする
+- 承認待ち（ループ計測・turn 1）: 23 件 — Bash: OpenClaw, Bash: SDKxcrun ×3, Bash: cat, Bash: cd ×3, Bash: find, Bash: git, Bash: grep ×5, Bash: ls, Bash: man, Bash: sdef ×2, Bash: swift, Bash: xcrun, Read ×2
