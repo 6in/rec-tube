@@ -19,12 +19,17 @@ import Foundation
 
 // `check` / `address` / `read` / `readIDs` / `AudioProc` / `audioProcesses()` は T2 で HAL.swift に移した。
 // `RecError` は T3 で ExitCode.swift に移した（`description` → `code` + `message`）。
+// tap / aggregate / IOProc の寿命は T5 で `AudioHAL` + `TapRecorder` に作り直した。ここに残る
+// `Recorder` は `LegacyRecorder` に改名した繋ぎで、`recordURL` / `recordLive` もろとも T9 で消える。
 
-// MARK: - Recorder
+// MARK: - LegacyRecorder
 
 /// `@unchecked Sendable`: 可変状態（`writing` / `file`）は `queue` 上でだけ触る規約。
-/// T5 の `TapRecorder` で、この規約をリスナー対応つきで作り直す。
-public final class Recorder: @unchecked Sendable {
+///
+/// T5 で `TapRecorder`（HAL 抽象化・リスナー・冪等 stop つき）に作り直したので、ここは
+/// `recordURL` / `recordLive` が T9 で消えるまでの繋ぎでしかない（だから `Legacy` 接頭辞を付けた）。
+/// **新しいコードはこのクラスを使わない**。
+public final class LegacyRecorder: @unchecked Sendable {
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
@@ -190,7 +195,7 @@ public func recordURL(_ url: String, path: String) throws {
         }
     }
 
-    let rec = try Recorder(targets: targets, path: path, writing: false)
+    let rec = try LegacyRecorder(targets: targets, path: path, writing: false)
     installSigint { rec.stop(); print("\n中断: \(path)") }
 
     // 本編が既に流れていたら頭出し（取りこぼし防止）
@@ -226,7 +231,7 @@ public func recordURL(_ url: String, path: String) throws {
 }
 
 public func recordLive(targets: [AudioObjectID]?, path: String) throws -> Never {
-    let rec = try Recorder(targets: targets, path: path)
+    let rec = try LegacyRecorder(targets: targets, path: path)
     print("録音中: \(path)  (\(Int(rec.format.sampleRate))Hz/\(rec.format.channelCount)ch)  Ctrl-C で停止")
     installSigint { rec.stop(); print("\n保存しました: \(path)") }
     dispatchMain()

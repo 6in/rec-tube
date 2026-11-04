@@ -257,7 +257,7 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
       `allZero` は二乗和ではなく `vDSP_maxmgv`（最大絶対値 == 0）で別に測る（アンダーフロー対策）。
       1 バッファが窓境界をまたぐ場合は `ingest` 内で区間分割する
 
-- [ ] T5: `TapRecorder`（HAL 抽象化・リスナー・冪等 stop・途中失敗の後始末）+ `FakeHAL`
+- [x] T5: `TapRecorder`（HAL 抽象化・リスナー・冪等 stop・途中失敗の後始末）+ `FakeHAL`
   - 完了基準:
     - `Sources/RecCore/AudioHAL.swift`: `protocol AudioHAL`（createTap / destroyTap / tapFormat / defaultOutputDevice / deviceUID / createAggregate / destroyAggregate /
       createIOProc / destroyIOProc / start / stop / addListener / removeListener / processList。名前は目安、**契約は「create 系に対応する destroy / remove が
@@ -296,6 +296,48 @@ scripts 側は人間と README 向けに残す（中身は上と同じ）。無�
     - A: AudioHAL protocol + CoreAudioHAL（対象: `AudioHAL.swift`）
     - B: TapRecorder（対象: `TapRecorder.swift`。A の protocol 名は上記で固定）
     - C: FakeHAL + テスト（対象: `Fakes/FakeHAL.swift`, `TapRecorderTests.swift`。PLAN の契約からテストを書く。B の実装は見ない）
+  - **T5 の実測（turn 7）**:
+    - **PLAN 訂正: サブ作業の割り方**。共有物（`AudioHAL.swift` の protocol + `CoreAudioHAL`、`Tests/.../Fakes/FakeHAL.swift`）は
+      **親が両方作り**、並列に出したのは B（`TapRecorder.swift`）と「テストだけ」の 2 本にした。
+      根拠: protocol と、それを実装する test double は**同時に書かないと噛み合わない**（別々に出すと
+      署名のすり合わせで 2 往復する）。T3 turn 5 / T4 turn 6 の「共有型は親が完成させる」と同じ理屈。
+      「テストを契約から独立に書かせる」構成（テスト担当は `TapRecorder.swift` を読まない）は維持した
+    - **PLAN 訂正: IOProc と listener の受け渡しは生の `AudioDeviceIOProcID` ではなく `IOProcToken` /
+      `ListenerToken`（`AudioHAL.swift` の `public final class`）**。根拠: `AudioDeviceIOProcID` は C の
+      関数ポインタ型なので `FakeHAL` が値を作れない（`AudioObjectAddPropertyListenerBlock` の解除も
+      「登録した block と queue の両方」が要る）。実装が解除に必要な物を `payload: Any?` に入れる箱にした。
+      protocol の該当メソッドは `createIOProc(device:queue:block:) -> IOProcToken` / `destroyIOProc(_:)` /
+      `start(_:)` / `stop(_:)` / `addListener(objectID:selector:queue:handler:) -> ListenerToken` / `removeListener(_:)`
+    - **PLAN 追記: `TapRecorder.init` に `startTimeout: Double = Tuning.tapStartTimeoutSeconds` を足した**。
+      根拠: watchdog のテストを 10 秒待たずに回すため（テストは 0.2 秒を渡す）。既定値は `Tuning` のまま
+    - **打ち切り（時間切れ）のときの後始末の持ち主は「作成スレッド」**。`start()` の呼び出し側は
+      「捨てる旗」を立てるだけで**何も破棄しない**。作成スレッドがブロックから戻ったところで旗に気づき、
+      それまでに作った物を逆順に 1 回破棄する。戻って来なければ後始末はプロセス終了に任せる。
+      根拠: まだ Core Audio の呼び出しの中にいる相手（その呼び出しが掴んでいる aggregate / tap）を
+      外から壊すのは安全でない。**実装は最初「打ち切り側が即破棄する」形で、テスト（契約から独立に
+      書いた側）が「逆順になっていない」と落とした** → 契約どおり作成スレッド側に寄せて green。
+      これが今回の並列構成が拾った唯一の食い違い
+    - **`swift test --sanitize=thread` はこの環境で動かない**（PLAN の「sanitize が動かなければ
+      PROGRESS に記録して通常実行のみ」の経路）。ビルドは通るが実行時に dyld が
+      `libclang_rt.tsan_osx_dynamic.dylib` を読めない（`code signature ... not valid for use in process:
+      Sanitizer load violates platform policy`）。Swift Testing 側の問題ではなく Xcode の sanitizer
+      ランタイムと OS のポリシーの不整合。`--sanitize=address` も同じ（T5 では通常実行のみで green）
+    - 確定した API（T6 / T8 はこの名前で配線する）:
+      `RecorderEvent { defaultOutputChanged, ioStoppedAbnormally, deviceDied, serviceRestarted, overload }`；
+      `TapRecorder(hal:target:ioQueue:startTimeout:sink:onEvent:)` / `start() throws` / `stop()` / `format: AVAudioFormat?`；
+      `AudioHAL` / `CoreAudioHAL()` / `IOProcToken` / `ListenerToken` / `TapIOBlock`
+    - `TapRecorder` の契約の補足（PLAN 本文に無かった点を実装で確定）:
+      (1) `sink` は `ioQueue` 上、`onEvent` は内部の直列キュー `rec.recorder.events` 上で呼ばれる
+      (2) 後始末の実体は `destroy(_:)` の 1 本だけ。入口は `stop()` / `deinit` / 途中失敗の巻き戻し /
+          打ち切り後の作成スレッド の 4 つで、順序は常に
+          「listener 逆順解除 → 開始済みなら `hal.stop` → `ioQueue.sync {}` → `destroyIOProc` → `destroyAggregate` → `destroyTap`」
+      (3) **`sink` の中から `stop()` を呼ぶと `ioQueue.sync {}` で自己デッドロックする**。
+          T8 は停止要求をセッションキューに逃がすこと（`coordinator.request` を ioQueue 上で完了させない）
+      (4) `stop()` は「捨てる旗」を立てるので、**`stop()` 後の `start()` は即座に失敗する**（再開はしない）。
+          `start()` の二重呼び出しのガードは入れていない（契約外。T8 は 1 回しか呼ばない）
+      (5) `format` は `stop()` 後も読める（破棄の対象ではない記録として残す）
+    - `Legacy.swift` の `Recorder` は **`LegacyRecorder` に改名**（`recordURL` / `recordLive` もろとも T9 で消える）。
+      `AudioFileWriter.swift` のコメントの参照も合わせた
 
 - [ ] T6: 停止の一本化（`StopCoordinator`）、シグナル（INT/TERM/HUP）、スリープ（IOKit）
   - 完了基準:
