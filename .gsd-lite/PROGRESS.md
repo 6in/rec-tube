@@ -257,3 +257,40 @@
   「10 スレッド同時 request / 同時 stop」のテストで担保している。
   (5) 実機の許可（システム設定 > プライバシーとセキュリティ > システム音声の録音で iTerm2 を許可 →
   iTerm2 再起動）はまだ必要。T10 / T11 の verify-* に入る前に人の操作が要る
+
+## turn 9 — impl — T7 Chrome 制御（`ScriptRunner` / `ChromeController` / probe JS と `ProbeResult`）
+- やったこと: 共有物（`ScriptRunner.swift` と `Fakes/FakeRunner.swift`）を親が先に作り、
+  A（`ChromeController` の実装）/ B（そのテストを契約から独立に記述）/ C（`ProbeJS` + `ProbeResult` + テスト）の
+  **3 本を並列サブエージェントに出した**。統合して検証: `swift test` **123 本 green**（既存 75 + 新規 48）、
+  debug / release ビルド green、新しい `--scratch-path` での `swift build --build-tests` で warning 0、
+  `rec --bogus` が 1 / `--list` が 0、`rg 'rec\.swift:[0-9]' Sources README.md` が 0 件
+- 想定外: (1) **`Legacy.swift` の旧 `probeJS` と新 `public let probeJS` が名前衝突した**
+  （`invalid redeclaration`。同じ `RecCore` モジュール内のトップレベル宣言）。C は担当外なので手を付けず報告で止め、
+  親が `legacyProbeJS` に改名して解いた（宣言 + 参照 3 箇所。`LegacyRecorder` と同じ扱いで T9 に消える）。
+  **新しいトップレベル名を足すときは `Legacy.swift` を先に grep する**のが安い
+  (2) **Chrome のオートメーション許可はすでに降りていた**。`timeout 10 osascript -e 'tell application
+  "Google Chrome" to get version'` が `157.0.8103.39` を返した（-1743 は出ない）。T2 turn 4 で足りないと
+  分かったのは**システム音声の取得**の許可だけで、オートメーションは別物だった。PLAN の実測欄に追記
+  (3) 親が自分で書いた `ScriptRunner.swift` のヘッダコメントに `rec.swift:161-171` と書いてしまい、
+  追従先チェックリストの「`rg 'rec\.swift:[0-9]' Sources README.md` が 0」に自分で違反した（検証で検出 → 文言を直した）。
+  **行番号参照の禁止はサブエージェントの依頼文には入れていたが、親自身の手書きで漏れた**
+  (4) `playErr` は `play()` の reject を同期的に待てないので実質ほぼ `null` になる（C が JavaScriptCore で実測）。
+  契約どおりなので保険は入れていない。T10 の自動再生拒否の検出は `playErr` 単独に頼らない方がよい
+- 既存テストの期待値を変えた箇所: **なし**（既存 75 本は 1 本も触っていない。`Legacy.swift` の改名は
+  内部シンボルのみで、テストから参照されていない）
+- やり直し: 0 回（親の統合での修正は `Legacy.swift` の改名 4 箇所と、上記 (3) のコメント 1 行だけ。
+  並列の 3 本はどれも一発で契約を満たした。**B の 25 本は A の実装に 1 行も手を入れずそのまま green** =
+  API サーフェスの食い違い 0 件）
+- 次への注意: (1) 次は **T8**（`SessionPolicy` と `RecordingSession`）。
+  **`execute` はタブ消失で `RecError(.pageLost)` を throw するが、決めた事項 #10 の表は `gone` を「入力」に持つ**。
+  T8 は probe の呼び出しを catch して `RecError(code: .pageLost)` を `ProbeOutcome.gone` として policy に渡すこと
+  （`parseProbe("gone")` も `.gone` を返すので、どちらの経路でも表の `gone` 行に合流する）。
+  (2) `execute` が `nil` を返すのは「今回は応答が取れなかった」だけ（許可系以外の非 0 と 15 秒の打ち切りも
+  ここに落ちる）。`.pageUnresponsive` を決めるのは T8 の連続回数カウント。
+  (3) **並列サブ作業は「共有型とその test double は親が同時に作る」で 3 ターン連続うまくいっている**（T5 / T6 / T7）。
+  T8 も `SessionAction` が共有型なので親が先に確定させてから A（policy 実装）/ B（表から独立にテスト）/
+  C（`RecordingSession`）に分ける。
+  (4) 実機の**システム音声の取得**の許可（システム設定 > プライバシーとセキュリティ > システム音声の録音で
+  iTerm2 を許可 → iTerm2 再起動）はまだ必要。T10 / T11 の verify-* に入る前に人の操作が要る。
+  Chrome の **JS 許可**（表示 > 開発/管理 > Apple Events からの JavaScript）も未確認のまま
+  （無人ターンでタブを開く副作用を避けた。verify-permission.sh / T10 で確かめる）
