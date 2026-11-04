@@ -668,3 +668,29 @@
   写して `turn-017-syntax.swift` 経由で回した。**写しなので final-check.sh を直したら写しも直す**
   （verify が節を足すなら、ユーザーに `Bash(scripts/final-check.sh:*)` の追加を頼むのが本筋）
 - 承認待ち（ループ計測・turn 17）: 5 件 — Bash: bash ×2, Bash: final-check.sh, Bash: find, Bash: git
+
+## turn 18 — verify — round 2 は差し戻し（F4 の 1 タスク・指摘 2 件）。実機は許可なしで未実施（5 回目）、verify_round 1 → 2
+
+- やったこと: `final-check.sh` 相当を素のコマンドで全段回して green（クリーンビルド 2 種 warning 0 / plist 埋め込み / `swift test` 220 本 /
+  追従チェックの写し ALL OK / `bash -n` 9 本 / CLI の exit）。E19 の格子（driver `turn-014-probe.swift`）を回して round 1 の 2 行が
+  直っていること（`bogus-stderr-closed` exit=1 / `list-stdout-closedpipe` exit=0、TRACEBACK 0 件）と E2 の理由行を実測。
+  読み取り専用サブエージェント 2 本（コードレビュー / セキュリティ）を F1〜F3 の差分に当て、報告をソースで裏取りして
+  `VERIFICATION.md` に round 2 を書き、指摘 2 件を PLAN の **F4**（E20: スリープ経路で `IOAllowPowerChange` が呼ばれない回帰 /
+  E21: `playErr` の端末制御文字の無害化）にまとめた。許可の有無は `swift run rec-probe tap system 2` で確認（exit 8 = 未許可）
+- 想定外: (1) **F1 の修正がスリープ経路に回帰を入れていた**。`finish(.sleep)` を同期に通すと `teardown` の `powerWatcher.stop()` が
+  `defer { acknowledge }` より先に port を壊し、`acknowledge` の `guard connect != 0` で ack が捨てられる。**E11 のテストは
+  `FakePowerSource.acknowledge` が `unregister` 後でも記録するので green のまま**で、fake が本物の制約を持っていないとテストは
+  回帰を映さない（「契約から独立に書いたテスト」でも fake の忠実さが足りないと抜ける）。
+  (2) **格子が turn 16 で開いた Chrome のタブ 4 つが残っていた**（turn 16 の申し送りに「閉じること」とあったが実施されていなかった）。
+  今回の 2 つと合わせて 6 つを osascript で閉じた。`whose URL starts with` のフィルタは Chrome で効かず、
+  タブを閉じるとウィンドウが消えてインデックスがずれるので「1 回のパスで 1 ウィンドウだけ閉じる」を 3 回回した。
+  (3) round 1 の方針「round 2 で許可が無ければ BLOCKED」は、修正が要る指摘が出たので差し戻しに変えた（人の操作を待つ間に
+  F4 を進められる）。round 3 で許可が無ければ BLOCKED
+- やり直し: 1 回（Chrome のタブの後始末。`whose` フィルタ → ループ → ウィンドウ単位のループの 3 形で、3 回目で片付いた）
+- 次への注意: (1) 次は `/gsd-lite-impl` で **F4**。期待結果は PLAN の表 **E20 / E21** だけを見る。E20 は**先に `FakePowerSource` を
+  本物と同じ「`unregister` 後の ack は無効」にして E11 のテストが現状で落ちることを確認してから**実装を直す（PLAN F4 に手順あり）。
+  (2) **システム音声の取得の許可は 5 回連続で未取得**。round 3 の verify は許可が無ければ BLOCKED にする。人の操作:
+  システム設定 > プライバシーとセキュリティ > 画面とシステムオーディオの録音 で iTerm2 を許可 → iTerm2 を再起動。
+  (3) F4 は stderr の経路を触らないので E19 の格子は回さなくてよい（2.6 分かかり Chrome のタブを 2 つ開く。回したら閉じること）。
+  (4) 無人ターンのシェルで通った形: `osascript -e '…' -e '…'`（複数 `-e` で AppleScript のループ）、`timeout --preserve-status 40 swift run rec-probe …`、
+  `swift <driver>.swift`、`grep -c` / `otool -P … | grep -c`。通らなかった形: `diff <(…) <(…)`（プロセス置換）

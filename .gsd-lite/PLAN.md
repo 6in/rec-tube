@@ -740,6 +740,8 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
 | E17 | `-o <既存のディレクトリ>` または末尾が `/` | 録音 | なし | そのディレクトリに既定名（`rec-<日時>` / タイトル）で `.m4a` を作る |
 | E18 | `-o x.wav`（`m4a` 以外の拡張子） | 1 | なし | usage エラー（拡張子は `m4a` のみ。無ければ付ける） |
 | E19 | `swift .gsd-lite/logs/rec-cli-hardening/scratch/turn-014-probe.swift`（堅牢性の格子の回帰） | — | 各行の exit が round 1 と同じ。`bogus-stderr-closed` が `exit=1`、`list-stdout-closedpipe` が `exit=0`、`TRACEBACK!` 0 件 | — |
+| E20 | スリープ通知（`systemWillSleep`）。**`unregister` の後の ack は無効**という本物（`IOKitPowerSource.acknowledge` の `guard connect != 0`）と同じ挙動を `FakePowerSource` に持たせて観測する | 5 | なし | `writer.close()` の後に **有効な ack がちょうど 1 回**返る（E11 の順序はそのまま。ack が `unregister` の後に来て捨てられる形は不合格） |
+| E21 | probe の `playErr` に制御文字（C0 / ESC / 改行 / `Cf`）や長大な文字列が含まれる | 継続 | なし | E10 の 1 行に制御文字が含まれず、`playErr` 由来の部分は UTF-8 で 64 バイト以内。`NotAllowedError` のような通常の名前はそのまま |
 
 - [x] F1: 停止理由・警告の出力、停止の順序、policy の訂正（要件の取りこぼし。VERIFICATION §4「要件の取りこぼし」）
   - 完了基準:
@@ -899,6 +901,38 @@ F1〜F3 は許可と独立に進められる。**無人ターンの作法**は�
     - **実機未検証**: `verify-permission.sh` の段 2（afplay + 録音）と `verify-adtest.sh` は
       システム音声の取得の許可が要るのでこのターンでは回していない（メモの【verify 前に必要な人の操作】のまま）。
       `afplay` の存在（`/usr/bin/afplay`）と `Tests/Fixtures/main.wav` が 440 Hz・12 秒であること（`afinfo`）は確認済み
+
+- [ ] F4: スリープ経路の ack の回帰と、ページ由来文字列の無害化（verify round 2 の指摘。VERIFICATION round 2 §4。期待結果は表 E20 / E21）
+  - 完了基準:
+    - **E20（F1 で入った回帰）**: いまの実経路は `PowerWatcher.receive` → `handler(.sleep)` → `RecordingSession.finish` →
+      `teardown()` → `powerWatcher?.stop()` → `IOKitPowerSource.unregister()`（`rootPort = 0`・`IOServiceClose`・`IONotificationPortDestroy`）
+      → ハンドラが戻る → `defer { source.acknowledge }` → `guard connect != 0 else { return }` で **`IOAllowPowerChange` が呼ばれない**。
+      `PowerWatcher.swift` 冒頭の不変条件（どちらのメッセージでも必ず `IOAllowPowerChange`）が実経路で偽になっている。
+      直し方はどちらか 1 つ: (a) `IOKitPowerSource` が「通知を受けた時点の `connect`」を通知に添えて（`PowerNotification` に
+      フィールドを足すか、`acknowledge` が `unregister` 前に控えた `connect` を使う）`unregister` 後でも ack できるようにする、
+      (b) `RecordingSession.finish` で `reason == .sleep` のときは `teardown()` から `powerWatcher?.stop()` を外し、
+      ハンドラが戻って ack が返った後に `sessionQueue.async { powerWatcher?.stop() }` で解除する（`completion` → `exit` との順序に注意:
+      `exit` が先なら解除は不要なので (b) は「止めない」だけでもよい）。
+      **`IODeregisterForSystemPower` / `IONotificationPortDestroy` をその port のコールバックの中から呼ぶ形は避ける**（(b) なら自然に避けられる）
+    - `FakePowerSource.acknowledge` を本物と同じ挙動にする: **`unregister` の後に呼ばれた ack は `log` に記録しない**（別に `droppedAcknowledges` を数える）。
+      まずこの変更だけで `RecordingSessionTests` の E11 のテスト（`close(ack=0)` → ack 1 回）が**現状の実装で落ちる**ことを確認してから実装を直す
+      （テストが回帰を検出できる形にしてから直す。落ちなければ fake の直し方が違う）
+    - **E21**: `SessionPolicy.autoplayWarning` が `Messages.autoplayRejected(name:)` に渡す前に `playErr` を無害化する。
+      関数 `public func sanitizeForTerminal(_ s: String) -> String` を `Sources/RecCore/OutputPath.swift` に置く
+      （`sanitizeFileName` と同じ判定の置き場。`Cc` / `Cf` / `Zl` / `Zp` を `_` に、UTF-8 で 64 バイトに切る。結合文字の途中で切らない。
+      `sanitizeFileName` の判定ヘルパーを共用してよい）。`savedTo` には適用しない（ファイル名は `sanitizeFileName` の契約のまま。
+      `Cf` を残す理由は T3 turn 5 の訂正）。`ProbeJS` 側の JS は変えない（ページが上書きできるので Swift 側で守る）
+    - テスト: `PowerWatcherTests` に「handler の中で `PowerWatcher.stop()` を呼んでも `WillSleep` の有効な ack が 1 回」を 1 本、
+      `RecordingSessionTests` の E11 を上の fake で green（E20）、`SessionPolicyTests` に E21 を 1 本
+      （`playErr = "x\n保存先: /tmp/evil\u{1B}]0;t\u{07}"` → `.warn` の文字列に `\n` / `\u{1B}` / `\u{07}` が無い、`"NotAllowedError"` はそのまま含まれる）、
+      `OutputPathTests` に `sanitizeForTerminal` の境界（64 バイト切り・結合文字・空文字列）を 1 本
+    - `swift test` green、`swift build --build-tests --scratch-path .build/f4` で warning 0、`rg -n 'standardError\.write' Sources` が 0、
+      `rg '^[^/]*\bexit\(' Sources/RecCore` が 0。E19 の格子は F4 が stderr の経路を触らないので回さなくてよい
+  - 対象: `Sources/RecCore/RecordingSession.swift`, `Sources/RecCore/PowerWatcher.swift`, `Sources/RecCore/SessionPolicy.swift`,
+    `Sources/RecCore/OutputPath.swift`, `Tests/RecCoreTests/Fakes/FakePowerSource.swift`, `Tests/RecCoreTests/PowerWatcherTests.swift`,
+    `Tests/RecCoreTests/RecordingSessionTests.swift`, `Tests/RecCoreTests/SessionPolicyTests.swift`, `Tests/RecCoreTests/OutputPathTests.swift`
+  - 依存: なし（F1〜F3 は完了済み）
+  - 並列サブ作業: なし（2 件とも小さく、E20 は fake とテストと実装を同じ人が順に触る必要がある）
 
 ## 決めた事項
 

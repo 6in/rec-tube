@@ -1,5 +1,92 @@
 # VERIFICATION — rec-cli-hardening
 
+## round 2（turn 18 / 2026-11-04）— 判定: **差し戻し**（F4 を PLAN に追記。verify_round 1 → 2）。実機は許可なしで未実施（5 回目）
+
+対象: round 1 の差し戻し F1〜F3 の修正差分 `git diff 6d162e2...HEAD`（Sources / Tests / scripts / README、34 ファイル、+1790 / -164）と、
+マイルストーン全体 `git diff main...HEAD` の最終判定。round 1 の方針どおり**新しいクラスの探索はせず**、round 1 の格子（E19）の
+再確認と F1〜F3 の差分の回帰だけを行った。並列レビュー: コードレビューとセキュリティチェックを読み取り専用のサブエージェント 2 本、
+親が機械検証・格子の回帰・実機の到達範囲・指摘の裏取り（ソースを読んで確認）を行った。
+
+### 1. 機械検証（`scripts/final-check.sh` 相当。すべて green）
+
+| 段 | 結果 |
+|---|---|
+| `rm -rf .build` → `swift build` / `swift build -c release` | 成功、warning 0（両ログで `warning` 0 件） |
+| `otool -P` に `NSAudioCaptureUsageDescription` / `__TEXT,__info_plist` セクション（debug / release） | 両方あり |
+| `swift test`（テストビルドの warning も 0） | **220 本 / 14 suite すべて green**（round 1 の 195 + F1 13 + F2 12） |
+| 追従チェック（`turn-017-followup-check.sh` = final-check の写し） | ExitCode 12 / README 12、許可 7 行、verify スクリプト 6 / 6、調整値リテラル自己テスト 5 行・外部 0 件、`standardError.write` 0、`rec.swift:NN` 0、直下の `rec.swift` 無し → ALL OK |
+| `bash -n scripts/*.sh`（9 本） | すべて exit 0 |
+| `rg '^[^/]*\bexit\(' Sources/RecCore` | 0 件 |
+| `.build/debug/rec --list` / `--bogus`（格子の 1・2 行目） | exit 0 / exit 1 |
+
+### 2. 格子の回帰（E19。driver `turn-014-probe.swift`、44 行、約 2.6 分）
+
+- **round 1 で落ちた 2 行が直っている**: `bogus-stderr-closed` SIGABRT → **exit=1**、`list-stdout-closedpipe` SIGPIPE → **exit=0**。`TRACEBACK!` 0 件
+- 他の行は round 1 と同じ exit（argv エラーはすべて exit 1 + 個別の説明、`-0` は 0 として通って録音へ、`url-space` / `url-newline` は 60 秒後 exit 6）。
+  違いは **E2 が効いて stderr に理由が出るようになった**こと: 「60 秒以内に動画の再生が始まらなかったので録音を中止しました（最後に見たページの状態: 欠測）」（round 1 は stderr 空）
+- `list-stdout-full` / `list-cwd-root` は driver 側の `posix_spawn` 失敗（`/dev/full` が macOS に無い・chdir 後の相対パス）で round 1 と同じ。対象の挙動ではない
+- 格子が開いた Chrome のタブ（`example.com` × 2。turn 16 の回帰で残っていた 4 つも含めて計 6 つ）は osascript で閉じて、Chrome を格子の前の状態に戻した。0 バイトの m4a は残っていない（E15 / P4）
+
+### 3. 実機（受け入れ基準「verify がループ内で実機録音を行う」）
+
+- **システム音声の取得の許可は依然として降りていない**（このターンで **5 回目**の実測）。`swift run rec-probe tap system 2` が
+  `aggregate created: 102` の次で 10 秒の watchdog に当たり **exit 8**。格子の `system-noperm` / `app-emptyprefix-noperm` / `adguard-negzero` も同じ
+- → **ローカル検証ページの広告境界と YouTube の完走は未実施**。verify スクリプト 6 本も回していない（`verify-permission.sh` の段 1 で落ちる）
+- round 1 の方針では「round 2 で許可が無ければ BLOCKED」だったが、今回はレビューで**修正が要る指摘が 2 件**出たので、人の操作を待つ間に
+  進められる差し戻し（F4）を選んだ。**round 3 は、許可が降りていなければ受け入れ基準の実機 2 項目を満たせないので BLOCKED にする**
+  （F4 の確認は許可と独立）。人の操作: **システム設定 > プライバシーとセキュリティ > 画面とシステムオーディオの録音 で iTerm2 を許可 → iTerm2 を再起動**
+
+### 4. 指摘（差し戻し。PLAN の F4 に完了基準、期待結果は表 E20 / E21）
+
+- (中・**F1 で入った回帰**) スリープ経路で `IOAllowPowerChange` が呼ばれない。F1 で `PowerWatcher` のハンドラが `claim(.sleep)` → その場で同期に `finish(.sleep)`
+  を通す形にしたため、`finish` → `teardown()` → `powerWatcher?.stop()` → `IOKitPowerSource.unregister()` が `rootPort` を 0 にして port を壊した**後**に
+  `PowerWatcher.receive` の `defer { source.acknowledge }` が走り、`acknowledge` の `guard connect != 0 else { return }` で ack が捨てられる
+  （`RecordingSession.swift:226-229` / `:578-586`、`PowerWatcher.swift:170-176` / `:242`。ソースを読んで確認）。`writer.close()` は ack より前に終わるので
+  **m4a は壊れない**（要件「スリープを検知したら止めて確定」は満たす）が、`PowerWatcher.swift` 冒頭の不変条件「どちらでも必ず `IOAllowPowerChange`」が
+  実経路で偽になり、`IODeregisterForSystemPower` / `IONotificationPortDestroy` をその port のコールバックの中から呼ぶ形にもなっている。
+  **E11 のテストが green なのは `FakePowerSource.acknowledge` が `unregister` 後でも記録するから**で、本物の挙動との差がテストに映っていない。
+  round 1 の時点ではこの経路が無かった（ack → 非同期 finish → unregister の順）ので round 1 では拾えない指摘
+- (中・セキュリティ) `playErr` はページの JS が自由に決められる文字列（`HTMLMediaElement.play` を上書きして `Promise.reject({name: "…"})` を返せば任意）で、
+  F1 の E10 がそれを**無害化せずに stderr の 1 行へ埋め込む**（`SessionPolicy.swift:276-282` → `Messages.swift:140-145`）。改行で偽の「保存先:」行、
+  ESC でターミナルのタイトル変更や OSC を注入できる。round 1 の残留リスク「敵対的なページは probe 結果を偽装できる」は録音の開始・停止の操作までで、
+  **端末への制御文字の注入は別のクラス**。F1 で新しく生えた出力経路なので round 1 では拾えない指摘
+
+### 5. 確認して問題なしとした点（F1〜F3 の差分）
+
+- `emitOutcome` の行順（停止理由 → `firstWriteError` → close エラー → noData / silent → liveStream → 保存先）は 1 箇所で固定され、`finish` / `fail` の両方が通る。
+  `fail()` も 0 バイトの m4a を消して `noData` を出す（E15）。削除するのは `reserveUniquePath` が返した URL そのもの（`O_EXCL` なので既存ファイルを消せない）
+- `StopCoordinator.claim` / `request` の先勝ちは 1 つのロックで共有（`request` = `claim` + ロック外 `queue.async`）。`onFirstRequest` は高々 1 回
+- E9 の無音警告タイマーはセッションキュー上、メータは `ioQueue.sync` で読み、`teardown` で cancel。`finish` / `completion` の二重呼び出しは `claimFinish()` で防ぐ。
+  IO / イベントキューからセッションキューへの新しい `sync` は無い（自己デッドロックなし）
+- `SessionPolicy`: `pendingAdResume` は `.ad` で立ち `rewindThenOpenGate` でだけ下りる（`main loading` / `main paused` では下りない）。b1〜b3 の `[.stop]` 短絡は維持。
+  警告列は 自動再生拒否 → SSAI → 無音。`autoplayRejected` は 1 セッション 1 回
+- `Console.writeStderr`: `write(2)` の部分書き込みを正しく進め、0 で抜け、`EINTR` だけ再試行、他は捨てる。読み越しなし。`signal(SIGPIPE, SIG_IGN)` は両 main の最初の実行文
+- `splitOutputPath`: E16 / E17 / E18 どおり。ディレクトリは作らない。ファイルを作る場所は `reserveUniquePath` の `open(O_CREAT|O_EXCL)` だけのまま
+- `ScriptRunner`: `DataBox` の読み書きとも `NSLock`、`kill` は自分が spawn した pid だけ。`SilenceMeter` の interleaved は `buf.stride` をポインタと vDSP の両方に掛け、読み越しなし。
+  `sanitizeFileName` の再トリムは同じ述語
+- **既存テストの期待値の変更は 0 件**（`git diff` で消えた `#expect` 3 行を確認: 2 行は失敗メッセージの文言だけ、1 行は `ProbeResultTests` の部分文字列照合を集合比較に強めたもの）。
+  新しいテストは表の行を具体的に断言している（行順のインデックス比較、ack 回数、exit コード、ファイルの有無）
+- 文書: README の終了コード表と `Messages.stopReason` の文言が一致、`-o` の説明は E18 どおり、「既知の制約」に 3 行あり。
+  `main:rec\.swift` / `rec\.swift:[0-9]` / `workspaces/|/Users/ohya` はいずれも 0 件。`Messages.stopReason` は 15 case を `default` なしで網羅
+- スクリプト: `set -euo pipefail` あり、`eval` なし、`--bind 127.0.0.1` あり、`pkill` は `Google Chrome Helper.*audio\.mojom\.AudioService` に絞られている
+
+### 6. 残留リスク（差し戻さない。round 1 の §6 に追加）
+
+- `-o .m4a` は `.m4a.m4a`、`-o foo.` は `foo..m4a` になる（`explicitBaseName` に `sanitizeFileName` を通していない。契約の行に無い）。`-o x.M4A` は usage エラー（厳密一致、PLAN F2 に記載）
+- `savedTo` が出す絶対パスはタイトル由来で、`sanitizeFileName` が `Cf`（RLO 等）を残すので表示が双方向制御で偽装されうる（連結絵文字を壊さないための T3 の決定）
+- `scripts/verify-permission.sh` の `pkill -f "afplay $TONE"` は相対パスのパターンで、同じユーザーが同時に 2 つの checkout で回すと互いの `afplay` を殺す
+- `scripts/verify-helper-restart.sh` の `pkill` に `-u` が無く、共有 Mac では他ユーザーの Chrome 音声ヘルパーに当たって（EPERM でも exit 0）検査が空振りしうる
+- `SIG_IGN` にした SIGPIPE は `osascript` に継承される（`ScriptRunner` が両パイプを EOF まで読み、timeout / kill があるので実害なし）
+- E2（`.pageUnavailable` の probe 要約）と E3 / E4 は実装のみで専用テストが無い（E2 は格子の `url-space` 行で実測）
+- `ScriptRunner` の打ち切り経路（SIGTERM → SIGKILL）は単体テストが無い（turn 16 から変わらず）
+
+### 7. 手動確認として残すもの（round 1 §7 と同じ。許可が降りた後）
+
+1. 実機検証 6 本（verify-permission → signals → adtest → youtube → helper-restart → longrun）
+2. 決めた事項 #2 の宿題（seed なし bundleIDs で音が入るか）
+3. スリープ → exit 5 と m4a の再生可否（F4 の後。`pmset sleepnow` は allowlist に入れない決定）
+4. 出力デバイスの切り替え → exit 5
+
 ## round 1（turn 14 / 2026-11-04）— 判定: **差し戻し**（F1〜F3 を PLAN に追記。verify_round 0 → 1）
 
 対象: `git diff main...HEAD`（71 ファイル、+12673 行。コードは `Package.swift` / `Sources/**` / `Tests/**` / `scripts/**` / `README.md`）。
