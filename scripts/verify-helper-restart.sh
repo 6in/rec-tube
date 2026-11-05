@@ -109,7 +109,7 @@ sleep "$KILL_AFTER"
 echo "== pkill -f 'Google Chrome Helper.*audio\.mojom\.AudioService'（$KILL_AFTER 秒後）=="
 pkill_code=0
 pkill -f 'Google Chrome Helper.*audio\.mojom\.AudioService' || pkill_code=$?
-echo "  pkill exit: $pkill_code（0 = 1 件以上殺した / 1 = 一致なし）"
+echo "  pkill exit: ${pkill_code}（0 = 1 件以上殺した / 1 = 一致なし）"
 
 if [ "$pkill_code" -ne 0 ]; then
 	# 後片付け（録音と見張りを落としてから失敗にする）。
@@ -117,7 +117,7 @@ if [ "$pkill_code" -ne 0 ]; then
 	wait "$rec_pid" 2>/dev/null || true
 	kill -TERM "$killer_pid" 2>/dev/null || true
 	wait "$killer_pid" 2>/dev/null || true
-	fail "Chrome の音声サービス（Google Chrome Helper … audio.mojom.AudioService）が見つからない（pkill exit $pkill_code）= Chrome が音を鳴らしていない。再生が始まっているか、許可 3 種が揃っているかを確かめる（stderr: $REC_ERR）"
+	fail "Chrome の音声サービス（Google Chrome Helper … audio.mojom.AudioService）が見つからない（pkill exit ${pkill_code}）= Chrome が音を鳴らしていない。再生が始まっているか、許可 3 種が揃っているかを確かめる（stderr: ${REC_ERR}）"
 fi
 
 rec_code=0
@@ -127,13 +127,13 @@ wait "$rec_pid" || rec_code=$?
 kill -TERM "$killer_pid" 2>/dev/null || true
 wait "$killer_pid" 2>/dev/null || true
 
-echo "  rec exit: $rec_code（期待 0）"
+echo "  rec exit: ${rec_code}（期待 0）"
 if [ -f "$TIMEOUT_MARKER" ]; then
 	echo "  （$REC_LIMIT 秒で打ち切った）"
 fi
 
 if [ "$rec_code" -ne 0 ]; then
-	echo "FAIL: rec が exit $rec_code で終わった（期待 0。stderr: $REC_ERR）" >&2
+	echo "FAIL: rec が exit $rec_code で終わった（期待 0。stderr: ${REC_ERR}）" >&2
 	echo "      5 = 中断（tap 故障・デバイス変更など）/ 6 = ページ喪失 / 8 = tap を作れない" >&2
 	exit "$rec_code"
 fi
@@ -147,7 +147,7 @@ verdict="$(swift run rec-probe analyze "$OUT" --main 440 --ad 1000 2>"$ANALYZE_E
 echo "  verdict: ${verdict:-(なし)}"
 echo "  analyze exit: $analyze_code"
 if [ "$analyze_code" -ne 0 ]; then
-	fail "analyze が exit $analyze_code（stderr: $ANALYZE_ERR）"
+	fail "analyze が exit ${analyze_code}（stderr: ${ANALYZE_ERR}）"
 fi
 
 silent="$(json_number "$verdict" silentSeconds)" || fail "verdict から silentSeconds を取れない: $verdict"
@@ -162,7 +162,7 @@ echo "  判定          : silentSeconds < totalSeconds × $SILENT_RATIO_MAX"
 
 if ! awk -v s="$silent" -v t="$total" -v r="$SILENT_RATIO_MAX" \
 	'BEGIN { exit (t > 0 && s < t * r) ? 0 : 1 }'; then
-	fail "無音が多すぎる（silentSeconds=$silent totalSeconds=$total 上限比 $SILENT_RATIO_MAX）= 音声サービスを落とした後が無音になっている疑い"
+	fail "無音が多すぎる（silentSeconds=$silent totalSeconds=$total 上限比 ${SILENT_RATIO_MAX}）= 音声サービスを落とした後が無音になっている疑い"
 fi
 
 echo "ALL OK"

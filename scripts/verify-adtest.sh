@@ -78,7 +78,7 @@ fi
 # 判定は rec の stderr の 1 行だけで行う（終了コードは見ない。ヘッダの説明のとおり、
 # 拒否されても rec は録音を続けるので 180 秒で打ち切られて exit 143 になる）。
 if grep -q '自動再生を拒否しました' "$REC_ERR"; then
-	echo "FAIL: Chrome が自動再生を拒否した（rec の stderr に拒否の行。rec exit $rec_code）。" >&2
+	echo "FAIL: Chrome が自動再生を拒否した（rec の stderr に拒否の行。rec exit ${rec_code}）。" >&2
 	grep -n '自動再生を拒否しました' "$REC_ERR" >&2 || true
 	cat >&2 <<-'EOS'
 		file:// のページには Chrome が音声つき自動再生を許さないことがある。次の 2 段で回避する:
@@ -93,7 +93,7 @@ if grep -q '自動再生を拒否しました' "$REC_ERR"; then
 fi
 
 if [ "$rec_code" -ne 0 ]; then
-	fail "rec が exit $rec_code で終わった（stderr: $REC_ERR）"
+	fail "rec が exit $rec_code で終わった（stderr: ${REC_ERR}）"
 fi
 if [ ! -f "$OUT" ]; then
 	fail "rec が出力ファイルを作らなかった: $OUT"
@@ -110,7 +110,7 @@ echo "  analyze exit : $analyze_code"
 echo "  期待: adWindows == 0 かつ |mainSeconds - 12| < 1.0"
 
 if [ "$analyze_code" -ne 0 ]; then
-	fail "analyze が exit $analyze_code（stderr: $ANALYZE_ERR）"
+	fail "analyze が exit ${analyze_code}（stderr: ${ANALYZE_ERR}）"
 fi
 
 echo "ALL OK"

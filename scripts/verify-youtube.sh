@@ -98,7 +98,7 @@ wait "$killer_pid" 2>/dev/null || true
 
 cd "$REPO"
 
-echo "  rec exit: $rec_code（期待 0）"
+echo "  rec exit: ${rec_code}（期待 0）"
 if [ -f "$TIMEOUT_MARKER" ]; then
 	echo "  （$REC_LIMIT 秒で打ち切った）"
 fi
@@ -108,14 +108,14 @@ comm -13 "$BEFORE" "$AFTER" >"$NEW_LIST"
 new_count="$(wc -l <"$NEW_LIST" | tr -d '[:space:]')"
 
 if [ "$rec_code" -ne 0 ]; then
-	echo "FAIL: rec が exit $rec_code で終わった（期待 0。stderr: $REC_ERR）" >&2
+	echo "FAIL: rec が exit $rec_code で終わった（期待 0。stderr: ${REC_ERR}）" >&2
 	echo "      2 = Chrome 制御不可 / 3 = ライブ配信 / 6 = ページ喪失 / 8 = tap を作れない（許可なしの疑い）" >&2
-	echo "      増えた .m4a: $new_count 個（一覧: $NEW_LIST）" >&2
+	echo "      増えた .m4a: $new_count 個（一覧: ${NEW_LIST}）" >&2
 	exit "$rec_code"
 fi
 
 echo "== 出力の検査 =="
-echo "  増えた .m4a: $new_count 個（期待 1。一覧: $NEW_LIST）"
+echo "  増えた .m4a: $new_count 個（期待 1。一覧: ${NEW_LIST}）"
 if [ "$new_count" -ne 1 ]; then
 	fail "scratch に増えた .m4a が $new_count 個（期待 1）"
 fi
@@ -125,7 +125,7 @@ echo "  出力名: $name"
 
 # 既定名は rec-yyyyMMdd-HHmmss（連番は -2 / -3 …）。この形だとタイトルが取れていない。
 if [[ "$name" =~ ^rec-[0-9]{8}-[0-9]{6}(-[0-9]+)?\.m4a$ ]]; then
-	fail "出力名が既定名（rec-<日時>.m4a）のまま: $name（= タイトルが取れていない）"
+	fail "出力名が既定名（rec-<日時>.m4a）のまま: ${name}（= タイトルが取れていない）"
 fi
 
 dur="$(afinfo "$SCRATCH/$name" 2>/dev/null | awk '/estimated duration/ { print $3; exit }')" || dur=""
@@ -139,7 +139,7 @@ fi
 
 echo "== result =="
 echo "  url      : $URL"
-echo "  出力名   : $name（既定名 rec-<日時>.m4a の形ではない）"
+echo "  出力名   : ${name}（既定名 rec-<日時>.m4a の形ではない）"
 echo "  rec exit : $rec_code"
 echo "  duration : $dur 秒"
 echo "ALL OK"

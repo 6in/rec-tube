@@ -101,7 +101,7 @@ if [ "$probe_code" -eq 4 ]; then
 	# 「tap を作って回せた」= 許可はある、という段 1 の目的は達している（音の有無は段 2 で見る）。
 	echo "  段 1 OK: tap を作れて 2 秒回せた（exit 4 = この時点では無音。音の有無は段 2 で見る）"
 elif [ "$probe_code" -ne 0 ]; then
-	fail "rec-probe tap が exit $probe_code で終わった（1 = 引数不正。ログ: $PROBE_LOG）"
+	fail "rec-probe tap が exit $probe_code で終わった（1 = 引数不正。ログ: ${PROBE_LOG}）"
 else
 	echo "  段 1 OK: tap を作れて音が入った"
 fi
@@ -163,7 +163,7 @@ if [ -n "$tone_pid" ]; then
 	tone_pid=""
 fi
 
-echo "  rec exit: $rec_code（期待 130 = 128 + SIGINT）"
+echo "  rec exit: ${rec_code}（期待 130 = 128 + SIGINT）"
 if [ -f "$TIMEOUT_MARKER" ]; then
 	echo "  （SIGINT が効かず $REC_LIMIT 秒で SIGTERM に落とした）"
 fi
@@ -174,7 +174,7 @@ if [ "$rec_code" -eq 8 ]; then
 	exit 1
 fi
 if [ "$rec_code" -ne 130 ]; then
-	fail "rec の終了コードが $rec_code（期待 130。stderr: $REC_ERR）"
+	fail "rec の終了コードが ${rec_code}（期待 130。stderr: ${REC_ERR}）"
 fi
 if [ ! -f "$OUT" ]; then
 	fail "rec が出力ファイルを作らなかった: $OUT"
@@ -182,18 +182,18 @@ fi
 
 analyze_code=0
 swift run rec-probe analyze "$OUT" --silence 2>"$ANALYZE_ERR" || analyze_code=$?
-echo "  analyze --silence exit: $analyze_code（0 = 音が入っている / 1 = 全ゼロ）"
+echo "  analyze --silence exit: ${analyze_code}（0 = 音が入っている / 1 = 全ゼロ）"
 
 if [ "$analyze_code" -eq 1 ]; then
-	echo "FAIL: 440 Hz のトーン（$TONE）を鳴らしていたのに録音が全ゼロだった（$OUT）。" >&2
+	echo "FAIL: 440 Hz のトーン（${TONE}）を鳴らしていたのに録音が全ゼロだった（${OUT}）。" >&2
 	echo "      鳴っている音が tap に入らないので、許可が降りていないか tap が機能していない。" >&2
-	echo "      ファイルが読めなかった場合も exit 1 になる（stderr: $ANALYZE_ERR）。" >&2
+	echo "      ファイルが読めなかった場合も exit 1 になる（stderr: ${ANALYZE_ERR}）。" >&2
 	echo "      出力デバイスの音量が 0 / ミュートでないかも確かめる（afplay は既定の出力に鳴らす）。" >&2
 	permission_help
 	exit 1
 fi
 if [ "$analyze_code" -ne 0 ]; then
-	fail "analyze が exit $analyze_code（stderr: $ANALYZE_ERR）"
+	fail "analyze が exit ${analyze_code}（stderr: ${ANALYZE_ERR}）"
 fi
 
 echo "== result =="

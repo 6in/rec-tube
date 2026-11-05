@@ -122,6 +122,6 @@ echo "== cli =="
 .build/debug/rec --list >/dev/null || fail "--list が exit 0 にならない"
 code=0
 .build/debug/rec --bogus 2>/dev/null || code=$?
-[ "$code" -eq 1 ] || fail "--bogus の終了コードが $code（期待 1）"
+[ "$code" -eq 1 ] || fail "--bogus の終了コードが ${code}（期待 1）"
 
 echo "ALL OK"

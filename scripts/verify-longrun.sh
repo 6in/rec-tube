@@ -47,7 +47,7 @@ fail() {
 
 # 数値で、かつ 1 より大きいこと（2 点目が 1 分時点より後にならないと比較にならない）。
 if ! awk -v m="$MINUTES" 'BEGIN { exit (m + 0 == m && m > 1) ? 0 : 1 }'; then
-	fail "分数は 1 より大きい数で指定してください（渡された値: $MINUTES）。1 分時点と N 分時点の 2 点を比べるので N > 1 が必要"
+	fail "分数は 1 より大きい数で指定してください（渡された値: ${MINUTES}）。1 分時点と N 分時点の 2 点を比べるので N > 1 が必要"
 fi
 
 SECOND_AT="$(awk -v m="$MINUTES" 'BEGIN { printf "%.0f", m * 60 - 60 }')"
@@ -85,7 +85,7 @@ rss1="$(ps -o rss= -p "$rec_pid" | tr -d '[:space:]')" || rss1=""
 if [ -z "$rss1" ]; then
 	kill -TERM "$killer_pid" 2>/dev/null || true
 	wait "$killer_pid" 2>/dev/null || true
-	fail "1 分時点で rec が生きていない（許可が無いと 10 秒で exit 8 になる。stderr: $REC_ERR）"
+	fail "1 分時点で rec が生きていない（許可が無いと 10 秒で exit 8 になる。stderr: ${REC_ERR}）"
 fi
 echo "  rss1 = $rss1 KB"
 
@@ -95,7 +95,7 @@ rss2="$(ps -o rss= -p "$rec_pid" | tr -d '[:space:]')" || rss2=""
 if [ -z "$rss2" ]; then
 	kill -TERM "$killer_pid" 2>/dev/null || true
 	wait "$killer_pid" 2>/dev/null || true
-	fail "$MINUTES 分時点で rec が生きていない（途中で止まった。stderr: $REC_ERR）"
+	fail "$MINUTES 分時点で rec が生きていない（途中で止まった。stderr: ${REC_ERR}）"
 fi
 echo "  rss2 = $rss2 KB"
 
@@ -119,14 +119,14 @@ echo "== result =="
 echo "  1 分時点の RSS   : $rss1 KB"
 echo "  $MINUTES 分時点の RSS : $rss2 KB"
 echo "  差               : $diff_kb KB（上限 $RSS_LIMIT_KB KB = 10 MB 未満）"
-echo "  rec exit         : $rec_code（期待 130 = 128 + SIGINT）"
-echo "  duration         : ${dur:-(不明)} 秒（期待 >= $MIN_DURATION 秒 = $MINUTES×60 − 5）"
+echo "  rec exit         : ${rec_code}（期待 130 = 128 + SIGINT）"
+echo "  duration         : ${dur:-(不明)} 秒（期待 >= $MIN_DURATION 秒 = ${MINUTES}×60 − 5）"
 
 if ! awk -v d="$diff_kb" -v lim="$RSS_LIMIT_KB" 'BEGIN { exit (d < lim) ? 0 : 1 }'; then
 	fail "RSS が $diff_kb KB 増えた（上限 $RSS_LIMIT_KB KB 未満）"
 fi
 if [ "$rec_code" -ne 130 ]; then
-	fail "rec の終了コードが $rec_code（期待 130。stderr: $REC_ERR）"
+	fail "rec の終了コードが ${rec_code}（期待 130。stderr: ${REC_ERR}）"
 fi
 if [ ! -f "$OUT" ]; then
 	fail "rec が出力ファイルを作らなかった: $OUT"

@@ -75,7 +75,7 @@ run_one() {
 	err="$SCRATCH/signals-$sig-$STAMP.rec-stderr.log"
 	marker="$SCRATCH/signals-$sig-$STAMP.timeout"
 
-	echo "== SIG$sig（期待 $expected）=="
+	echo "== SIG${sig}（期待 ${expected}）=="
 	echo "  out: $out"
 
 	.build/debug/rec -o "$out" 2>"$err" &
@@ -100,13 +100,13 @@ run_one() {
 	kill -TERM "$killer_pid" 2>/dev/null || true
 	wait "$killer_pid" 2>/dev/null || true
 
-	echo "  exit: $code（期待 $expected）"
+	echo "  exit: ${code}（期待 ${expected}）"
 	if [ -f "$marker" ]; then
 		echo "  （SIG$sig が効かず $REC_LIMIT 秒で SIGKILL に落とした）"
 		note_fail "$sig" "$REC_LIMIT 秒で SIGKILL に落とした（SIG$sig が効かなかった）"
 	fi
 	if [ "$code" -ne "$expected" ]; then
-		note_fail "$sig" "終了コードが $code（期待 $expected）。stderr: $err"
+		note_fail "$sig" "終了コードが ${code}（期待 ${expected}）。stderr: $err"
 		if [ "$code" -eq 8 ]; then
 			PERMISSION_SUSPECTED=1
 		fi
