@@ -71,6 +71,7 @@ do {
     let session = RecordingSession(mode: mode,
                                    output: output,
                                    adGuardSeconds: options.adGuard,
+                                   startDelaySeconds: options.startDelay,
                                    completion: { code in exit(code.rawValue) })
     session.start()
     // `completion` が `exit()` を呼ぶまでここで待つ（`dispatchMain()` は戻らない）。

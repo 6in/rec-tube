@@ -34,6 +34,7 @@ rec — macOS の音声を m4a に録音する
 オプション:
   -o <パス>                      出力先（既定: rec-<日時>.m4a。同名があれば -2 / -3 … を付ける）
   --ad-guard <秒>                広告ガードの遅延（既定 1.0、範囲 0〜10）。--url のときだけ効く
+  --start-delay <秒>             録音開始から再生までの待ち（既定 0.5、範囲 0〜5）。--url のときだけ効く
 
 --url には Chrome の「表示 > 開発/管理 > Apple Events からの JavaScript を許可」が必要。
 """
@@ -57,11 +58,17 @@ public struct Options: Sendable, Equatable {
     public let output: String?
     /// 広告ガードの秒数。既定は `Tuning.adGuardSeconds`。
     public let adGuard: Double
+    /// 録音開始から再生までの秒数。既定は `Tuning.startDelaySeconds`。
+    public let startDelay: Double
 
-    public init(mode: Mode, output: String? = nil, adGuard: Double = Tuning.adGuardSeconds) {
+    public init(mode: Mode,
+                output: String? = nil,
+                adGuard: Double = Tuning.adGuardSeconds,
+                startDelay: Double = Tuning.startDelaySeconds) {
         self.mode = mode
         self.output = output
         self.adGuard = adGuard
+        self.startDelay = startDelay
     }
 }
 
@@ -73,6 +80,7 @@ public func parseArguments(_ args: [String]) throws -> Options {
     var mode = Options.Mode.system
     var output: String?
     var adGuard = Tuning.adGuardSeconds
+    var startDelay = Tuning.startDelaySeconds
 
     var it = args.makeIterator()
     while let arg = it.next() {
@@ -99,12 +107,22 @@ public func parseArguments(_ args: [String]) throws -> Options {
                     + "\(Tuning.adGuardRange.upperBound) の範囲で指定してください: \(value)")
             }
             adGuard = seconds
+        case "--start-delay":
+            guard let value = it.next() else { throw usageError("--start-delay に秒数がありません。") }
+            guard let seconds = Double(value), seconds.isFinite else {
+                throw usageError("--start-delay の値が数値ではありません: \(value)")
+            }
+            guard Tuning.startDelayRange.contains(seconds) else {
+                throw usageError("--start-delay は \(Tuning.startDelayRange.lowerBound)〜"
+                    + "\(Tuning.startDelayRange.upperBound) の範囲で指定してください: \(value)")
+            }
+            startDelay = seconds
         default:
             throw usageError("不明な引数: \(arg)")
         }
     }
 
-    return Options(mode: mode, output: output, adGuard: adGuard)
+    return Options(mode: mode, output: output, adGuard: adGuard, startDelay: startDelay)
 }
 
 // MARK: - `-o` の分解

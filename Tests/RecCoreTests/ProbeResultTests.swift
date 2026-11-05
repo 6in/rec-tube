@@ -237,9 +237,16 @@ struct ProbeResultTests {
         #expect(rewindJS.contains("\(Tuning.adResumeRewindSeconds)"))
     }
 
-    @Test("seekToStartJS は currentTime を 0 にして ok を返す")
-    func seekToStartJSSeeksToZero() {
-        #expect(seekToStartJS.contains("currentTime=0"))
-        #expect(seekToStartJS.contains("'ok'"))
+    @Test("holdAtStartJS は一時停止してから currentTime を 0 にして ok を返す")
+    func holdAtStartJSPausesAndSeeksToZero() {
+        #expect(holdAtStartJS.contains("v.pause();v.currentTime=0"))
+        #expect(holdAtStartJS.contains("'ok'"))
+    }
+
+    @Test("playJS は play() を呼び、reject を外へ漏らさず ok を返す")
+    func playJSPlays() {
+        #expect(playJS.contains("v.play()"))
+        #expect(playJS.contains("p.catch("))
+        #expect(playJS.contains("'ok'"))
     }
 }

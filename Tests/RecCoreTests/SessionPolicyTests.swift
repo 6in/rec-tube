@@ -107,7 +107,7 @@ struct SessionPolicyTests {
     private func startedPolicy(now: Double = 0) -> SessionPolicy {
         var policy = makePolicy()
         let actions = policy.step(probe: probe("main", "playing"), meter: meter(), now: at(now))
-        #expect(actions == [.startRecording(title: Self.videoTitle), .seekToStart, .openGate],
+        #expect(actions == [.holdAtStart, .startRecording(title: Self.videoTitle), .openGate, .playAfterDelay],
                 "前提が崩れている（初回 main playing の固定期待値）: \(actions)")
         return policy
     }
@@ -207,7 +207,7 @@ struct SessionPolicyTests {
 
         // まだフェーズ A のままなので、`.startRecording` は未消費。
         let actions = policy.step(probe: probe("main", "playing"), meter: meter(), now: at(2))
-        #expect(actions == [.startRecording(title: Self.videoTitle), .seekToStart, .openGate],
+        #expect(actions == [.holdAtStart, .startRecording(title: Self.videoTitle), .openGate, .playAfterDelay],
                 "ライブ検出で録音開始済みになっていた: \(actions)")
     }
 
@@ -226,19 +226,19 @@ struct SessionPolicyTests {
 
     // MARK: - 2c. 初回の完全な状態の固定期待値
 
-    @Test("初回 main playing → [.startRecording(title:), .seekToStart, .openGate]")
+    @Test("初回 main playing → 止めて頭出し → 録音開始 → 待って再生")
     func firstMainPlayingStartsAndOpensGate() {
         var policy = makePolicy()
         let actions = policy.step(probe: probe("main", "playing"), meter: meter(), now: at(1))
-        #expect(actions == [.startRecording(title: Self.videoTitle), .seekToStart, .openGate],
+        #expect(actions == [.holdAtStart, .startRecording(title: Self.videoTitle), .openGate, .playAfterDelay],
                 "固定期待値と違う: \(actions)")
     }
 
-    @Test("初回 main paused → [.startRecording(title:), .closeGateHold]")
+    @Test("初回 main paused → 止めて頭出し → 録音開始 → 待って再生")
     func firstMainPausedStartsAndHolds() {
         var policy = makePolicy()
         let actions = policy.step(probe: probe("main", "paused"), meter: meter(), now: at(1))
-        #expect(actions == [.startRecording(title: Self.videoTitle), .closeGateHold],
+        #expect(actions == [.holdAtStart, .startRecording(title: Self.videoTitle), .openGate, .playAfterDelay],
                 "固定期待値と違う: \(actions)")
     }
 
@@ -769,13 +769,13 @@ struct SessionPolicyTests {
         #expect(whileAd == [.wait], "広告中に無音警告が出た: \(whileAd)")
     }
 
-    @Test("初回 main paused（gate は初期値のまま閉）でも無音警告は出ない")
+    @Test("初回 main paused の step では無音警告は出ない")
     func silenceWarningStaysQuietBeforeGateEverOpened() {
         var policy = makePolicy()
         let actions = policy.step(probe: probe("main", "paused"),
                                   meter: meter(silent: Tuning.silenceWarnAfterSeconds * 10),
                                   now: at(1))
-        #expect(actions == [.startRecording(title: Self.videoTitle), .closeGateHold],
+        #expect(actions == [.holdAtStart, .startRecording(title: Self.videoTitle), .openGate, .playAfterDelay],
                 "gate を開く前に無音警告が出た: \(actions)")
     }
 
@@ -848,7 +848,7 @@ struct SessionPolicyTests {
         #expect(policy.step(probe: .none, meter: meter(), now: at(0)) == [.wait],
                 "実時刻を読んでいる疑い（startedAt + 0 秒で待たなかった）")
         #expect(policy.step(probe: probe("main", "playing"), meter: meter(), now: at(1))
-            == [.startRecording(title: Self.videoTitle), .seekToStart, .openGate])
+            == [.holdAtStart, .startRecording(title: Self.videoTitle), .openGate, .playAfterDelay])
     }
 
     // MARK: - ヘルパの自己検査

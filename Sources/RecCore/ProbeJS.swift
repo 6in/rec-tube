@@ -53,9 +53,16 @@ public let rewindJS = """
 if(v)v.currentTime=Math.max(0,v.currentTime-\(Tuning.adResumeRewindSeconds));return 'ok';})()
 """
 
-/// 本編の頭出し（`currentTime = 0`）をする JS。video が無ければ何もしない。戻り値は `ok`。
-public let seekToStartJS = """
-(function(){var v=document.querySelector('video');if(v)v.currentTime=0;return 'ok';})()
+/// 本編を一時停止して先頭に戻す JS。video が無ければ何もしない。戻り値は `ok`。
+public let holdAtStartJS = """
+(function(){var v=document.querySelector('video');if(v){v.pause();v.currentTime=0;}return 'ok';})()
+"""
+
+/// 本編を再生する JS。video が無ければ何もしない。戻り値は `ok`。
+///
+/// `play()` の reject はここでは見ない（次の probe が `playErr` として拾う）。
+public let playJS = """
+(function(){var v=document.querySelector('video');if(v){var p=v.play();if(p&&typeof p.catch==='function'){p.catch(function(){});}}return 'ok';})()
 """
 
 // MARK: - デコード結果

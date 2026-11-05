@@ -97,6 +97,30 @@ func cliCombinedOptions() throws {
     #expect(options == Options(mode: .url("https://x.test/v"), output: "out.m4a", adGuard: 2))
 }
 
+/// `--start-delay` は既定値と上書き、範囲の両端を受け付ける。
+@Test("--start-delay sets the start delay seconds")
+func cliStartDelay() throws {
+    #expect(try parseArguments([]).startDelay == Tuning.startDelaySeconds)
+    #expect(try parseArguments(["--start-delay", "0.75"]).startDelay == 0.75)
+    #expect(try parseArguments(["--start-delay", "0"]).startDelay == 0)
+    #expect(try parseArguments(["--start-delay", "5"]).startDelay == 5)
+}
+
+/// `--start-delay` の値が無い・数値でない・範囲外なら `.usage`。
+@Test("--start-delay rejects missing, non-numeric and out-of-range values",
+      arguments: [["--start-delay"],
+                  ["--start-delay", "abc"],
+                  ["--start-delay", "nan"],
+                  ["--start-delay", "-0.1"],
+                  ["--start-delay", "5.1"]])
+func cliStartDelayRejects(args: [String]) {
+    #expect {
+        try parseArguments(args)
+    } throws: { error in
+        (error as? RecError)?.code == .usage
+    }
+}
+
 // MARK: - モードの後勝ち（断言 5）
 
 /// モードが複数あったら最後に来たものが勝つ（断言 5）。

@@ -27,8 +27,13 @@ public enum SessionAction: Sendable, Equatable {
     /// 1 セッションで**ちょうど 1 回**だけ出る。
     case startRecording(title: String?)
 
-    /// 本編の頭出し（`seekToStartJS`）。
-    case seekToStart
+    /// 本編を一時停止して先頭に戻す（`holdAtStartJS`）。`.startRecording` より**前**に実行する。
+    /// 頭出し前の音が録音に入らないようにするため。以後 `.playAfterDelay` まで probe を止める
+    /// （probe は `v.paused` なら `v.play()` を呼ぶので、止めないと待たずに再生が始まる）。
+    case holdAtStart
+
+    /// `startDelaySeconds` 待ってから再生し（`playJS`）、probe を再開する。
+    case playAfterDelay
 
     /// gate を開く（録音を書く）= `pipeline.setGate(true, discardHeld: false)`。
     case openGate
