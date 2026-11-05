@@ -751,3 +751,11 @@
   (5) 無人ターンのシェルで通った形: `timeout --preserve-status 40 swift run rec-probe …`（foreground、tool timeout 90 秒）、`swift test --filter 'a|b|c'`、
   `otool -P <bin> | grep -c …`、`grep -rnE … --exclude=… --exclude-dir=…`、`git show <sha>:<path>`。通らなかった形: `./gsd-lite-loop.sh --where`、
   `grep --include=*.swift`（zsh のグロブ展開で落ちる。`--include` を付けずに Sources を指定する）
+
+## turn 21 — verify — 合格 / 指摘 0 / main へローカルマージ（対話セッションで実施）
+- やったこと: BLOCKED の解除後、ユーザーが tmux の外の iTerm2 タブで実機 6 本と tap プローブを実行し、対話セッションがログを判定した。6 本すべて rc=0。
+  宿題は seed なし bundleIDs が無音で、hybrid に確定（コード変更なし）。`final-check.sh` rc=0 を確認して main へ `--no-ff` でマージ。無人の verify ターンは使っていない
+- 想定外: (1) `scripts/*.sh` が bash 3.2 の `$var）` 解釈で落ちた（7 本 32 箇所を修正）。`bash -n` では検出できない。(2) 許可は iTerm2 に付き tmux 配下に継承されないので、
+  受け入れ基準「ループ内で実機録音」はループ内では満たせず、ユーザーの手動実行で代えた。(3) 許可の付与先の切り分けに時間がかかり、許可なしの verify が 6 回続いた（tmux サーバは親が launchd で iTerm2 の許可を継承しない）
+- やり直し: 1 回（実機 6 本。スクリプト修正後に全本を再実行）
+- 次への注意: 残留リスクは VERIFICATION round 4 §6（出力デバイス切り替え、スリープ、実 YouTube 広告、E11 の順序断言）。実機検証は tmux の外で実行する。`/bin/bash` のスクリプトでは全角文字の直前の変数を `${var}` にする

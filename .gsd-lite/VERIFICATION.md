@@ -1,5 +1,60 @@
 # VERIFICATION — rec-cli-hardening
 
+## round 4（turn 21 / 2026-11-05）— 判定: **合格**（実機 6 本 green、指摘 0）。main へマージ。verify_round は 2 のまま
+
+無人ループではなく、**人の対話セッションで実施した**（下の「受け入れ基準からの逸脱」）。F4 の再検証はせず、BLOCKED.md の A の範囲（実機 6 本 + 決めた事項 #2 の宿題）と
+機械検証の再実行だけを行った。新しいクラスの探索とコードレビューのやり直しはしていない。
+
+### 1. 機械検証
+
+`scripts/final-check.sh` は rc=0（2026-11-05 13:56）。`swift test` 225 本 / 14 suite green、追従チェック全段 OK。スクリプト修正 7 本を含む作業ツリーで実行した。
+
+### 2. 実機 6 本（2026-11-05 08:10〜08:31、tmux の外の iTerm2 タブで実行。すべて rc=0）
+
+| 検証 | 実測 |
+|---|---|
+| permission | 段 1（録音開始）・段 2（鳴らした音が入る）とも OK |
+| signals | SIGINT=130 / SIGTERM=143 / SIGHUP=129、duration 2.90 / 2.91 / 2.89 秒 |
+| adtest | adWindows 0、mainSeconds 11.8（期待 12、許容差 1.0 未満）、silent 0.2 秒、total 12.09 秒 |
+| youtube | exit 0、19.27 秒、出力名 `Me at the zoo-2.m4a`（タイトル由来 + 連番） |
+| helper-restart | pkill exit 0（音声サービスを実際に停止）、rec exit 0、silent 0.3 / total 19.71 秒。adWindows 31 は実音声の 1000 Hz 成分で、この検証の判定には使わない |
+| longrun | 599.94 秒、RSS 19552 → 20032 KB（差 480 KB、上限 10 MB）、exit 130 |
+
+ログは `.gsd-lite/logs/verify-manual.log`（git 管理外）。
+
+### 3. 決めた事項 #2 の宿題（2026-11-05 11:33）
+
+| プローブ | 結果 |
+|---|---|
+| (0) `rec-probe list` | 再生中に running = `com.google.Chrome.helper`（pid 99 のプロセス 1 件） |
+| (a) `hybrid` 3 秒 | 音あり（-20.4 dBFS） |
+| (b) `bundleids` 3 秒（seed なし、再生中に作成） | **無音**（allZero 3 秒） |
+| (c) `bundleids` 8 秒（作成 3 秒後に再生） | **無音**（allZero 8 秒） |
+| (d) `hybrid` 録音中に音声サービス停止 | 単独では測っていない。`hybrid` を使う実装で helper-restart が確認済み |
+| (e) `processes` 3 秒 | 音あり（-19.3 dBFS） |
+
+→ **seed なしの `bundleIDs` では音が入らないので、`bundleIDs` seed あり（hybrid）で確定**。実装（`RecordingSession.swift`、`rec/main.swift`）はすでに seed ありで、コード変更なし。
+ログは `.gsd-lite/logs/verify-manual-rest.log`（git 管理外）。
+
+### 4. 実機で見つかった問題
+
+実機の初回実行で `scripts/*.sh` が `rec_code: unbound variable` で落ちた。macOS の `/bin/bash` 3.2 が UTF-8 ロケールで `$var）` の全角文字まで変数名として読むため。
+7 本の 32 箇所を `${var}` に直してコミットした。`rec` 本体の欠陥ではない。ループ内の機械検証は `bash -n` なので検出できなかった。
+
+### 5. 受け入れ基準からの逸脱
+
+受け入れ基準は「verify が**ループ内で**実機録音を行う」だが、ループ内では実行していない。システム音声の許可は iTerm2 に付き、tmux 配下のプロセスには継承されないため。
+ユーザーが tmux の外のタブで検証 6 本を実行し、対話セッションがログを判定した。確認した内容は基準どおりで、実行場所だけが異なる。
+
+### 6. 残留リスク（未実測）
+
+ユーザー判断でスキップした。いずれもマージの条件ではない（round 3 まで「手動確認として残すもの」）。
+
+1. **出力デバイスの切り替え → exit 5**: 実機では未確認。`swift test` の範囲のみ
+2. **スリープ → exit 5 と m4a の再生可否（E20 の実機側）**: 実機では未確認。`swift test` の範囲のみ
+3. **実 YouTube 広告の境界**: 広告境界はローカル検証ページでのみ実測した。youtube 検証の動画に広告が入ったかは確認していない
+4. round 3 §5 の E11 の順序断言（F5 相当）は入れていない。コードの欠陥ではなく検出力の欠け
+
 ## round 3（turn 20 / 2026-11-05）— 判定: **F4 合格・マイルストーンは BLOCKED**（実機の許可が 6 回目も未取得。verify_round は 2 のまま）
 
 対象: round 2 の差し戻し F4 の修正差分 `git diff ccdf51b...HEAD -- Sources Tests`（8 ファイル、+357 / -27。scripts / README / Package.swift に変更なし）と、
