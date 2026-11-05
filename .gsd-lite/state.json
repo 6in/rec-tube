@@ -18,12 +18,12 @@
     "name": "",
     "path": "."
   },
-  "milestone": "",
-  "phase": "discuss",
-  "next_command": "DISCUSS",
+  "milestone": "rec-cli-hardening",
+  "phase": "blocked",
+  "next_command": "BLOCKED",
   "branch": {
-    "name": "",
-    "base": ""
+    "name": "gsd-lite/rec-cli-hardening",
+    "base": "main"
   },
   "research": {
     "targets": [
@@ -35,10 +35,10 @@
       "~/workspaces"
     ]
   },
-  "turn": 0,
+  "turn": 20,
   "max_turns": 60,
   "retry_max": 2,
-  "verify_round": 0,
+  "verify_round": 2,
   "verify_round_max": 3,
   "model": {
     "research": "claude-fable-5-1",
@@ -47,5 +47,5 @@
     "verify": "claude-fable-5-1",
     "reflect": "claude-fable-5-1"
   },
-  "updated_at": "2026-11-04T13:46:55+09:00"
+  "updated_at": "2026-11-05T00:22:32+09:00"
 }

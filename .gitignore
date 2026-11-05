@@ -1,2 +1,5 @@
 .gsd-lite/logs/
 .gsd-lite/loop.pid
+.build/
+*.m4a
+*.wav

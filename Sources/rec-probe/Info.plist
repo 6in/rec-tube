@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>dev.rec-tube.rec-probe</string>
+	<key>CFBundleName</key>
+	<string>rec-probe</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.2.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>rec-probe は tap の作り方を確かめるためにシステム音声の取得を使います</string>
+</dict>
+</plist>
