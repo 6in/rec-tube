@@ -11,6 +11,11 @@ import Foundation
 
 /// 調整値。インスタンスを作らない名前空間。
 public enum Tuning {
+    // MARK: - MP3
+
+    /// MP3 の品質（ffmpeg / libmp3lame の `-q:a`。0 が最高、9 が最低。2 で 190 kbps 前後の可変ビットレート）。
+    public static let mp3Quality: Int = 2
+
     // MARK: - 録音開始の余白
 
     /// 録音を始めてから本編を再生するまでの待ち（秒）。`--start-delay` で上書きできる。

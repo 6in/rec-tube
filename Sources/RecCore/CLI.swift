@@ -23,7 +23,7 @@ import Foundation
 /// **`--help` / `-h` は未定義**（未知のオプションとして `.usage` に落ち、この本文つきで exit 1 になる）。
 /// README「既知の制約」にも同じことを書いてある。
 public let usageText = """
-rec — macOS の音声を m4a に録音する
+rec — macOS の音声を m4a / mp3 に録音する
 
 使い方:
   rec                            システム全体の音を録音（Ctrl-C で停止）
@@ -32,12 +32,22 @@ rec — macOS の音声を m4a に録音する
   rec --list                     音声を扱っているプロセスの一覧
 
 オプション:
-  -o <パス>                      出力先（既定: rec-<日時>.m4a。同名があれば -2 / -3 … を付ける）
+  -o <パス>                      出力先（既定: rec-<日時>.m4a。同名があれば -2 / -3 … を付ける）。
+                                 拡張子が .mp3 なら MP3 で保存する
+  --format <m4a|mp3>             保存形式（既定 m4a）。mp3 には ffmpeg が必要
   --ad-guard <秒>                広告ガードの遅延（既定 1.0、範囲 0〜10）。--url のときだけ効く
   --start-delay <秒>             録音開始から再生までの待ち（既定 0.5、範囲 0〜5）。--url のときだけ効く
 
 --url には Chrome の「表示 > 開発/管理 > Apple Events からの JavaScript を許可」が必要。
 """
+
+/// 保存形式。`rawValue` がそのまま拡張子。
+public enum OutputFormat: String, Sendable, Equatable, CaseIterable {
+    /// AAC 192 kbps（既定）。
+    case m4a
+    /// MP3（ffmpeg で変換）。
+    case mp3
+}
 
 /// 解釈済みの引数。
 public struct Options: Sendable, Equatable {
@@ -60,15 +70,19 @@ public struct Options: Sendable, Equatable {
     public let adGuard: Double
     /// 録音開始から再生までの秒数。既定は `Tuning.startDelaySeconds`。
     public let startDelay: Double
+    /// 保存形式。`--format` か `-o` の拡張子で決まる。既定は `.m4a`。
+    public let format: OutputFormat
 
     public init(mode: Mode,
                 output: String? = nil,
                 adGuard: Double = Tuning.adGuardSeconds,
-                startDelay: Double = Tuning.startDelaySeconds) {
+                startDelay: Double = Tuning.startDelaySeconds,
+                format: OutputFormat = .m4a) {
         self.mode = mode
         self.output = output
         self.adGuard = adGuard
         self.startDelay = startDelay
+        self.format = format
     }
 }
 
@@ -81,6 +95,7 @@ public func parseArguments(_ args: [String]) throws -> Options {
     var output: String?
     var adGuard = Tuning.adGuardSeconds
     var startDelay = Tuning.startDelaySeconds
+    var formatFlag: OutputFormat?
 
     var it = args.makeIterator()
     while let arg = it.next() {
@@ -117,12 +132,26 @@ public func parseArguments(_ args: [String]) throws -> Options {
                     + "\(Tuning.startDelayRange.upperBound) の範囲で指定してください: \(value)")
             }
             startDelay = seconds
+        case "--format":
+            guard let value = it.next() else { throw usageError("--format に形式がありません。") }
+            guard let format = OutputFormat(rawValue: value.lowercased()) else {
+                throw usageError("--format は m4a か mp3 です: \(value)")
+            }
+            formatFlag = format
         default:
             throw usageError("不明な引数: \(arg)")
         }
     }
 
-    return Options(mode: mode, output: output, adGuard: adGuard, startDelay: startDelay)
+    // 形式: `-o` の拡張子が m4a / mp3 ならそれ。`--format` と食い違えば引数エラー。
+    // それ以外の拡張子は `splitOutputPath` が弾く。
+    let extFormat = output.flatMap { OutputFormat(rawValue: URL(fileURLWithPath: $0).pathExtension.lowercased()) }
+    if let extFormat, let formatFlag, extFormat != formatFlag {
+        throw usageError("-o の拡張子（\(extFormat.rawValue)）と --format（\(formatFlag.rawValue)）が食い違っています。")
+    }
+    let format = extFormat ?? formatFlag ?? .m4a
+
+    return Options(mode: mode, output: output, adGuard: adGuard, startDelay: startDelay, format: format)
 }
 
 // MARK: - `-o` の分解
@@ -135,11 +164,12 @@ public func parseArguments(_ args: [String]) throws -> Options {
 /// 断言（PLAN の検証表 E16 / E17 / E18）:
 ///   - `""`（空文字列）は `.usage`（E16）
 ///   - 末尾が `/`、または**既に存在するディレクトリ**なら、そのディレクトリ +
-///     `explicitBaseName: nil` + `ext: "m4a"`（E17。名前は `RecordingSession` が決める）
-///   - 拡張子が `m4a` 以外なら `.usage`（E18）。**拡張子が無ければ `m4a` を使う**
+///     `explicitBaseName: nil` + `ext`（E17。名前は `RecordingSession` が決める）
+///   - 拡張子が `ext` 以外なら `.usage`（E18）。**拡張子が無ければ `ext` を使う**
 ///
+/// - Parameter ext: 保存形式の拡張子（`Options.format.rawValue`）。
 /// - Throws: `RecError(code: .usage, ...)` のみ
-public func splitOutputPath(_ path: String) throws -> SessionOutput {
+public func splitOutputPath(_ path: String, ext: String = OutputFormat.m4a.rawValue) throws -> SessionOutput {
     guard !path.isEmpty else { throw usageError("-o の出力先が空です。") }
 
     // 末尾の `/` か、既に存在するディレクトリなら「その中に既定名で作る」指定（E17）。
@@ -148,17 +178,17 @@ public func splitOutputPath(_ path: String) throws -> SessionOutput {
     if path.hasSuffix("/") || (exists && isDirectory.boolValue) {
         return SessionOutput(directory: URL(fileURLWithPath: path, isDirectory: true),
                              explicitBaseName: nil,
-                             ext: "m4a")
+                             ext: ext)
     }
 
     let url = URL(fileURLWithPath: path)
-    let ext = url.pathExtension
-    guard ext.isEmpty || ext == "m4a" else {
-        throw usageError("-o の拡張子は m4a だけです（無ければ m4a を付けます）: \(path)")
+    let given = url.pathExtension.lowercased()
+    guard given.isEmpty || given == ext else {
+        throw usageError("-o の拡張子は m4a か mp3 です（無ければ \(ext) を付けます）: \(path)")
     }
     return SessionOutput(directory: url.deletingLastPathComponent(),
                          explicitBaseName: url.deletingPathExtension().lastPathComponent,
-                         ext: "m4a")
+                         ext: ext)
 }
 
 // MARK: - 補助

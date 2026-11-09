@@ -27,6 +27,12 @@ public enum Messages {
           tccutil reset ScreenCapture
         """
 
+    /// MP3 で保存したいのに ffmpeg が見つからないときの案内。
+    public static let ffmpegMissing = """
+        MP3 で保存するには ffmpeg が必要です。次のコマンドで入れてから実行してください。
+          brew install ffmpeg
+        """
+
     /// Chrome のオートメーションが許可されていないとき（AppleScript エラー -1743）の案内。
     public static let chromeAutomationPermission = """
         Google Chrome を操作する許可がありません（AppleScript エラー -1743）。

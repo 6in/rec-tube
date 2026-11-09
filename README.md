@@ -70,7 +70,8 @@ rec --list                               # 音声を扱っているプロセス�
 
 | オプション | 既定 | 意味 |
 |---|---|---|
-| `-o <パス>` | `rec-<日時>.m4a`（`--url` はページのタイトル由来） | 出力先。拡張子は `m4a` のみ。他を渡すと引数エラー（exit 1）。無ければ付ける |
+| `-o <パス>` | `rec-<日時>.m4a`（`--url` はページのタイトル由来） | 出力先。拡張子は `m4a` か `mp3`（`.mp3` なら MP3 で保存）。他を渡すと引数エラー（exit 1）。無ければ付ける |
+| `--format <m4a\|mp3>` | `m4a` | 保存形式。`mp3` には ffmpeg が必要。`-o` の拡張子と食い違うと引数エラー（exit 1） |
 | `--ad-guard <秒>` | `1.0`（範囲 `0`〜`10`） | 広告ガードの遅延。`--url` のときだけ効く |
 | `--start-delay <秒>` | `0.5`（範囲 `0`〜`5`） | 録音開始から再生までの待ち。`--url` のときだけ効く |
 
@@ -78,7 +79,16 @@ rec --list                               # 音声を扱っているプロセス�
   それ以外は `rec-yyyyMMdd-HHmmss.m4a`。**同名のファイルがあれば `-2` / `-3` … を拡張子の手前に付ける**
   （`-o` を指定した場合も同じ。既存ファイルを上書きしない）。
 - **`-o` の形**: `-o out.m4a` はそのファイル名、`-o dir/` と `-o <既存のディレクトリ>` は
-  そのディレクトリに既定の名前で置く。`-o ''`（空文字列）と `m4a` 以外の拡張子は引数エラー（exit 1）。
+  そのディレクトリに既定の名前で置く。`-o ''`（空文字列）と `m4a` / `mp3` 以外の拡張子は引数エラー（exit 1）。
+- **MP3 で保存する**（`--format mp3` か `-o x.mp3`）: macOS には MP3 のエンコーダが無いので ffmpeg を使う
+  （`brew install ffmpeg`。無ければ録音を始める前に exit 7）。録音中は同じ場所の `<名前>.recording.caf`
+  （ロスレス）に書き、停止後に MP3（libmp3lame、`-q:a 2` で 190 kbps 前後の可変ビットレート）に変換して消す。
+  圧縮は 1 回だけ。**停止してから変換が終わるまで数秒〜数十秒かかる**（1 時間の録音でおよそ 1 分）。
+  変換に失敗したら `.recording.caf` を残してその場所を出し、exit 7。スリープで止まったときは変換が終わるまで
+  スリープを待たせる（macOS は最大 30 秒ほどで構わず眠るので、長い録音では変換が寝起きをまたぐことがある）。
+- **録音済みの m4a を MP3 にする**: `scripts/m4a-to-mp3.sh [-q 品質] [-d 出力先] <m4a かディレクトリ>...`。
+  元の m4a は残し、同名の mp3 があれば `-2` / `-3` … を付ける。m4a（AAC）からの変換なので、
+  `--format mp3` で録るより音質がわずかに落ちる。
 - **`--url` の停止条件**: 再生が最後まで終わる / 次の動画へ遷移する / タブが閉じられる。
   広告は録音に含めず、広告明けは `0.7` 秒だけ巻き戻してから録り直す。
 - **`--url` の録音開始**: 本編を検知したら一時停止して先頭に戻し、録音を始めてから `--start-delay` の秒数だけ待って
@@ -133,7 +143,7 @@ Chrome のメニュー「表示 > 開発/管理 > **Apple Events からの JavaS
 | 4 | `.silent` | 全編無音（権限なしの疑い）。ファイルは残す | `.permissionSuspected`, 終了時の無音判定 |
 | 5 | `.interrupted` | 出力デバイス変更・スリープ・coreaudiod 再起動・IO 異常停止・デバイス消失・tap 故障 | `.deviceChanged`, `.sleep`, `.serviceRestarted`, `.ioStopped`, `.deviceDied`, `.tapStalled` |
 | 6 | `.pageLost` | タブ閉鎖・60 秒以内に動画が見つからない / 再生開始しない・20 秒応答なし | `.tabClosed`, `.pageUnavailable`, `.pageUnresponsive` |
-| 7 | `.outputUnavailable` | 出力ファイルを作れない・書き込みエラー | `.writeFailed`, `OutputPath`, `AVAudioFileWriter` |
+| 7 | `.outputUnavailable` | 出力ファイルを作れない・書き込みエラー・MP3 に変換できない（ffmpeg が無い・失敗した） | `.writeFailed`, `OutputPath`, `AVAudioFileWriter`, `MP3FileWriter` |
 | 8 | `.coreAudio` | tap / aggregate / IOProc の作成・開始失敗、`--list` 取得失敗、その他の予期しないエラー | `TapRecorder.start`, main の catch-all |
 | 129 | `.signalHUP` | SIGHUP で中断（128 + 1） | `.signal(1)` |
 | 130 | `.signalINT` | SIGINT で中断（128 + 2）。`Ctrl-C` がこれ | `.signal(2)` |

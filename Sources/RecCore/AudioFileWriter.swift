@@ -1,4 +1,4 @@
-// AudioFileWriter.swift — 出力ファイルへの書き出し（AAC 192 kbps / m4a）。
+// AudioFileWriter.swift — 出力ファイルへの書き出し（AAC 192 kbps / m4a。MP3 用の一時ファイルは ALAC / caf）。
 //
 // 役割は 2 つだけ:
 //   1. `AVAudioFile` を開く / 書く / 閉じるを 1 か所に閉じ込める
@@ -36,16 +36,30 @@ public final class AVAudioFileWriter: AudioFileWriting, @unchecked Sendable {
     private var file: AVAudioFile?
     private var isOpen = false
 
+    /// m4a の設定。単一ファイル版の `Recorder.init`（`git show 45301d8:rec.swift`）と同一（AAC 192 kbps）。
+    public static func aacSettings(for format: AVAudioFormat) -> [String: Any] {
+        [AVFormatIDKey: kAudioFormatMPEG4AAC,
+         AVSampleRateKey: format.sampleRate,
+         AVNumberOfChannelsKey: format.channelCount,
+         AVEncoderBitRateKey: 192_000]
+    }
+
+    /// MP3 に変換する前の一時ファイル（.caf）の設定。ロスレス（ALAC 24 bit）。
+    public static func losslessSettings(for format: AVAudioFormat) -> [String: Any] {
+        [AVFormatIDKey: kAudioFormatAppleLossless,
+         AVSampleRateKey: format.sampleRate,
+         AVNumberOfChannelsKey: format.channelCount,
+         AVEncoderBitDepthHintKey: 24]
+    }
+
     /// 書き出し先を開く。開けなければ `RecError(code: .outputUnavailable, ...)`。
-    public init(url: URL, format: AVAudioFormat) throws {
+    ///
+    /// - Parameter settings: エンコード設定。省略時は `aacSettings(for:)`（m4a）。
+    public init(url: URL, format: AVAudioFormat, settings: [String: Any]? = nil) throws {
         self.url = url
         do {
-            // 設定は単一ファイル版の `Recorder.init`（`git show 45301d8:rec.swift`）と同一（AAC 192 kbps）。
             file = try AVAudioFile(forWriting: url,
-                                   settings: [AVFormatIDKey: kAudioFormatMPEG4AAC,
-                                              AVSampleRateKey: format.sampleRate,
-                                              AVNumberOfChannelsKey: format.channelCount,
-                                              AVEncoderBitRateKey: 192_000],
+                                   settings: settings ?? Self.aacSettings(for: format),
                                    commonFormat: format.commonFormat,
                                    interleaved: format.isInterleaved)
         } catch {

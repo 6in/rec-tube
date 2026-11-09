@@ -97,6 +97,47 @@ func cliCombinedOptions() throws {
     #expect(options == Options(mode: .url("https://x.test/v"), output: "out.m4a", adGuard: 2))
 }
 
+/// 保存形式: 既定は m4a。`--format` か `-o` の拡張子で mp3 になる。
+@Test("--format and the -o extension choose the output format")
+func cliFormat() throws {
+    #expect(try parseArguments([]).format == .m4a)
+    #expect(try parseArguments(["--format", "mp3"]).format == .mp3)
+    #expect(try parseArguments(["--format", "MP3"]).format == .mp3)
+    #expect(try parseArguments(["-o", "x.mp3"]).format == .mp3)
+    #expect(try parseArguments(["-o", "x.MP3"]).format == .mp3)
+    #expect(try parseArguments(["-o", "x", "--format", "mp3"]).format == .mp3)
+    #expect(try parseArguments(["-o", "x.m4a"]).format == .m4a)
+    #expect(try parseArguments(["--format", "mp3", "-o", "x.mp3"]).format == .mp3)
+}
+
+/// 保存形式の不正: 値なし・未知の形式・`-o` の拡張子と `--format` の食い違いは `.usage`。
+@Test("--format rejects missing, unknown and conflicting values",
+      arguments: [["--format"],
+                  ["--format", "wav"],
+                  ["--format", "mp3", "-o", "x.m4a"],
+                  ["-o", "x.mp3", "--format", "m4a"]])
+func cliFormatRejects(args: [String]) {
+    #expect {
+        try parseArguments(args)
+    } throws: { error in
+        (error as? RecError)?.code == .usage
+    }
+}
+
+/// `splitOutputPath` は渡された拡張子を使い、それ以外の拡張子は弾く。
+@Test("splitOutputPath uses the given extension")
+func cliSplitOutputMP3() throws {
+    let named = try splitOutputPath("dir/song.mp3", ext: "mp3")
+    #expect(named.explicitBaseName == "song")
+    #expect(named.ext == "mp3")
+    let bare = try splitOutputPath("dir/song", ext: "mp3")
+    #expect(bare.ext == "mp3")
+    let directory = try splitOutputPath("out/sub/", ext: "mp3")
+    #expect(directory.explicitBaseName == nil)
+    #expect(directory.ext == "mp3")
+    #expect(throws: RecError.self) { try splitOutputPath("dir/song.m4a", ext: "mp3") }
+}
+
 /// `--start-delay` は既定値と上書き、範囲の両端を受け付ける。
 @Test("--start-delay sets the start delay seconds")
 func cliStartDelay() throws {

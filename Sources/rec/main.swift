@@ -10,6 +10,7 @@
 // 値で返すだけ（`RecError.code` / `RecordingSession` の `completion`）でプロセスを殺さない。
 // だからライブラリはそのままテストから呼べる。
 
+import AVFoundation
 import Foundation
 import RecCore
 
@@ -61,17 +62,31 @@ do {
     // `rec-<日時>.m4a`（名前は `RecordingSession` が決める）。
     let output: SessionOutput
     if let path = options.output {
-        output = try splitOutputPath(path)
+        output = try splitOutputPath(path, ext: options.format.rawValue)
     } else {
         output = SessionOutput(directory: URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
                                explicitBaseName: nil,
-                               ext: "m4a")
+                               ext: options.format.rawValue)
+    }
+
+    // 保存形式ごとの writer。MP3 は ffmpeg が無ければ録音を始める前に止める。
+    let makeWriter: (URL, AVAudioFormat) throws -> AudioFileWriting
+    switch options.format {
+    case .m4a:
+        makeWriter = { try AVAudioFileWriter(url: $0, format: $1) }
+    case .mp3:
+        guard let ffmpeg = findFFmpeg() else {
+            throw RecError(code: .outputUnavailable, message: Messages.ffmpegMissing)
+        }
+        let convert = ffmpegMP3Converter(ffmpeg: ffmpeg)
+        makeWriter = { try MP3FileWriter(url: $0, format: $1, convert: convert) }
     }
 
     let session = RecordingSession(mode: mode,
                                    output: output,
                                    adGuardSeconds: options.adGuard,
                                    startDelaySeconds: options.startDelay,
+                                   makeWriter: makeWriter,
                                    completion: { code in exit(code.rawValue) })
     session.start()
     // `completion` が `exit()` を呼ぶまでここで待つ（`dispatchMain()` は戻らない）。
