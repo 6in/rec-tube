@@ -1,16 +1,17 @@
 # rec-tube
 
 macOS の音声を録音する CLI。Core Audio の Process Tap で指定したプロセス（または全体）の
-出力をそのまま掴み、`--url` では Chrome で YouTube を開いて**本編だけ**を m4a に残す。
+出力をそのまま掴み、`--url` では Chrome で YouTube を開いて**本編だけ**を m4a（`--format mp3` なら MP3）に残す。
 
-> 現在 `rec-cli-hardening` マイルストーンの実装中。単一ファイル版から移した暫定コードは
-> すべて `Sources/RecCore` の各型に置き換わった（単一ファイル版は `git show 45301d8:rec.swift`）。
+> 単一ファイル版（`git show 45301d8:rec.swift`）を `rec-cli-hardening` マイルストーンで SwiftPM の構成に
+> 作り直した。コードは `Sources/RecCore` の各型にある。
 
 ## 必要なもの
 
 - macOS 26.0 以降（`LSMinimumSystemVersion` = 26.0）
 - **Xcode**（Command Line Tools だけでは不足。理由は下の「テスト」）
 - Google Chrome（`--url` モードのみ）
+- ffmpeg（MP3 で保存するとき・`scripts/m4a-to-mp3.sh` を使うときのみ。`brew install ffmpeg`）
 
 ## ビルド
 
