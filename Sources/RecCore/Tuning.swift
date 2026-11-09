@@ -11,6 +11,20 @@ import Foundation
 
 /// 調整値。インスタンスを作らない名前空間。
 public enum Tuning {
+    // MARK: - MP3
+
+    /// MP3 の品質（ffmpeg / libmp3lame の `-q:a`。0 が最高、9 が最低。2 で 190 kbps 前後の可変ビットレート）。
+    public static let mp3Quality: Int = 2
+
+    // MARK: - 録音開始の余白
+
+    /// 録音を始めてから本編を再生するまでの待ち（秒）。`--start-delay` で上書きできる。
+    /// 本編の先頭が欠けないように、冒頭にこの長さの無音を入れる。
+    public static let startDelaySeconds: Double = 0.5
+
+    /// `--start-delay` で受け付ける範囲（秒）。
+    public static let startDelayRange: ClosedRange<Double> = 0.0 ... 5.0
+
     // MARK: - 広告ガード（決めた事項 #4）
 
     /// 遅延線の長さ（秒）。広告の境界が録音に混ざらないように出力を遅らせる幅。

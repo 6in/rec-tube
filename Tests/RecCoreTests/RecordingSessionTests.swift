@@ -131,6 +131,77 @@ struct RecordingSessionTests {
         "live":false,"title":"テスト動画","len":120,"playErr":null}
         """
 
+    // MARK: - 0. url モードの開始順
+
+    @Test("url モードは 止めて頭出し → 録音開始 → 待ち（probe なし）→ 再生 の順で進む")
+    func urlModeHoldsThenPlaysAfterDelay() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let hal = FakeHAL()
+        hal.processes = [AudioProc(id: 42, bundle: "com.google.Chrome", running: true)]
+        let audio = makeBuffer(format: hal.tapFormatValue, frames: 48_000, value: 0.5)
+
+        let lock = NSLock()
+        var events: [String] = []
+        func record(_ event: String) { lock.withLock { events.append(event) } }
+
+        let runner = FakeRunner()
+        var probes = 0
+        runner.handler = { call in
+            if call.script.contains("get version") {
+                return ScriptResult(status: 0, stdout: "140.0.0.0", stderr: "")
+            }
+            if call.script.contains("set URL of active tab") {
+                return ScriptResult(status: 0, stdout: "9001", stderr: "")
+            }
+            if call.script.contains("execute t javascript") {
+                let js = call.arguments.count >= 2 ? call.arguments[1] : ""
+                // `emit` は tap が動いていないと false を返すので、録音開始との前後が分かる。
+                let recording = hal.emit(audio)
+                if js == holdAtStartJS {
+                    record("hold recording=\(recording)")
+                } else if js == playJS {
+                    record("play recording=\(recording)")
+                } else if js == probeJS {
+                    record("probe")
+                    probes += 1
+                    let json = probes == 1 ? Self.playingJSON : Self.endedJSON
+                    return ScriptResult(status: 0, stdout: json, stderr: "")
+                }
+            }
+            return ScriptResult(status: 0, stdout: "ok", stderr: "")
+        }
+
+        let sink = Sink()
+        let writers = WriterBox()
+        let session = RecordingSession(
+            mode: .url("https://www.youtube.com/watch?v=abc123"),
+            output: SessionOutput(directory: directory, explicitBaseName: nil),
+            hal: hal,
+            runner: runner,
+            powerSource: FakePowerSource(),
+            signals: [],
+            startDelaySeconds: 0.2,
+            pollInterval: 0.01,
+            makeWriter: { url, _ in
+                let writer = FakeWriter(url: url)
+                writers.put(writer)
+                return writer
+            },
+            onMessage: { sink.message($0) },
+            completion: { sink.complete($0) }
+        )
+
+        session.start()
+        #expect(waitUntil(timeout: 5.0) { sink.completionCount == 1 },
+                "completion が来ない: messages=\(sink.allMessages)")
+
+        let seen = lock.withLock { events }
+        #expect(seen == ["probe", "hold recording=false", "play recording=true", "probe"],
+                "開始の順序が違う: \(seen)")
+    }
+
     // MARK: - 1. url モード: 開始 → ended → completion(.ok)
 
     @Test("url モードで本編を録り、ended で completion(.ok) が 1 回だけ呼ばれてタブが閉じられる")
@@ -157,7 +228,7 @@ struct RecordingSessionTests {
             if call.script.contains("execute t javascript") {
                 let js = call.arguments.count >= 2 ? call.arguments[1] : ""
                 guard js == probeJS else {
-                    // `seekToStartJS` / `rewindJS`。
+                    // `holdAtStartJS` / `playJS` / `rewindJS`。
                     return ScriptResult(status: 0, stdout: "ok", stderr: "")
                 }
                 // 録音が始まって gate が開いたあと、1 窓ぶんずつ音を流す。
@@ -182,6 +253,7 @@ struct RecordingSessionTests {
             runner: runner,
             powerSource: FakePowerSource(),
             signals: [],
+            startDelaySeconds: 0.01,
             pollInterval: 0.01,
             makeWriter: { url, _ in
                 let writer = FakeWriter(url: url)
@@ -249,6 +321,7 @@ struct RecordingSessionTests {
             runner: runner,
             powerSource: FakePowerSource(),
             signals: [],
+            startDelaySeconds: 0.01,
             pollInterval: 0.01,
             makeWriter: { url, _ in
                 let writer = FakeWriter(url: url)
@@ -320,6 +393,7 @@ struct RecordingSessionTests {
             runner: runner,
             powerSource: FakePowerSource(),
             signals: [],
+            startDelaySeconds: 0.01,
             pollInterval: 0.01,
             makeWriter: { url, _ in
                 let writer = FakeWriter(url: url, writeError: writeError)
@@ -406,6 +480,7 @@ struct RecordingSessionTests {
             runner: runner,
             powerSource: FakePowerSource(),
             signals: [],
+            startDelaySeconds: 0.01,
             pollInterval: 0.01,
             makeWriter: { url, _ in
                 let writer = FakeWriter(url: url)
@@ -469,6 +544,7 @@ struct RecordingSessionTests {
             runner: runner,
             powerSource: powerSource,
             signals: [],
+            startDelaySeconds: 0.01,
             pollInterval: 0.01,
             makeWriter: { url, _ in
                 let writer = FakeWriter(url: url)
@@ -565,6 +641,7 @@ struct RecordingSessionTests {
             runner: runner,
             powerSource: FakePowerSource(),
             signals: [],
+            startDelaySeconds: 0.01,
             pollInterval: 0.01,
             makeWriter: { url, _ in
                 let writer = FakeWriter(url: url)
@@ -637,6 +714,7 @@ struct RecordingSessionTests {
             runner: runner,
             powerSource: FakePowerSource(),
             signals: [],
+            startDelaySeconds: 0.01,
             pollInterval: 0.01,
             makeWriter: { url, _ in
                 let writer = FakeWriter(url: url)

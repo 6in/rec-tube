@@ -75,6 +75,7 @@ public final class RecordingSession: @unchecked Sendable {
     private let mode: SessionMode
     private let output: SessionOutput
     private let adGuardSeconds: Double
+    private let startDelaySeconds: Double
     private let hal: AudioHAL
     private let runner: ScriptRunner
     private let powerSource: PowerSource
@@ -130,6 +131,8 @@ public final class RecordingSession: @unchecked Sendable {
     private var recorder: TapRecorder?
     /// 「録音開始の手順」を通したか（1 セッションに 1 回だけ）。
     private var recordingStarted = false
+    /// 本編を止めて録音開始後の待ちに入っているか。`true` の間は `poll` が probe を投げない。
+    private var isHoldingStart = false
     /// 最後に見た probe を 1 語で覚えたもの（`.pageUnavailable` の案内に添える。E2）。
     ///
     /// 初期値は `"none"`（まだ probe を 1 度も取っていない）。`poll` が `.none` を受けたら
@@ -148,6 +151,7 @@ public final class RecordingSession: @unchecked Sendable {
     ///   - mode: 何を録るか
     ///   - output: 出力先（分解済み）
     ///   - adGuardSeconds: 遅延線の長さ（秒）。**url モードだけ**使う（他は 0）
+    ///   - startDelaySeconds: 録音開始から再生までの待ち（秒）。**url モードだけ**使う
     ///   - hal: Core Audio への入口（テストは `FakeHAL`）
     ///   - runner: AppleScript の実行口（テストは `FakeRunner`）
     ///   - powerSource: 電源通知（テストは `FakePowerSource`）
@@ -165,6 +169,7 @@ public final class RecordingSession: @unchecked Sendable {
                 runner: ScriptRunner = OsascriptRunner(),
                 powerSource: PowerSource = IOKitPowerSource(),
                 signals: [Int32] = [SIGINT, SIGTERM, SIGHUP],
+                startDelaySeconds: Double = Tuning.startDelaySeconds,
                 pollInterval: Double = Tuning.pollIntervalSeconds,
                 startTimeout: Double = Tuning.tapStartTimeoutSeconds,
                 makeWriter: @escaping (URL, AVAudioFormat) throws -> AudioFileWriting
@@ -175,6 +180,7 @@ public final class RecordingSession: @unchecked Sendable {
         self.mode = mode
         self.output = output
         self.adGuardSeconds = adGuardSeconds
+        self.startDelaySeconds = startDelaySeconds
         self.hal = hal
         self.runner = runner
         self.powerSource = powerSource
@@ -276,7 +282,7 @@ public final class RecordingSession: @unchecked Sendable {
 
     /// probe を 1 回取って policy に渡し、返ってきた指示を順番に適用する。
     private func poll() {
-        guard !isFinished, let chrome, let tab else { return }
+        guard !isFinished, !isHoldingStart, let chrome, let tab else { return }
 
         // 1. probe。`.pageLost` は `.gone` に畳む（T7 の申し送り。`parseProbe("gone")` と同じ行に合流する）。
         let outcome: ProbeOutcome
@@ -317,6 +323,15 @@ public final class RecordingSession: @unchecked Sendable {
         }
     }
 
+    /// 待ちが明けたら再生して probe を再開する（セッションキュー上）。
+    private func playAfterDelay() {
+        guard !isFinished else { return }
+        if let chrome, let tab {
+            _ = try? chrome.execute(tab: tab, js: playJS)
+        }
+        isHoldingStart = false
+    }
+
     /// まだ録音を開始していないときに policy へ渡す「すべて 0」の snapshot。
     private static let zeroSnapshot = MeterSnapshot(everNonZero: false,
                                                     consecutiveAllZeroSeconds: 0,
@@ -334,9 +349,14 @@ public final class RecordingSession: @unchecked Sendable {
             break
         case .startRecording(let title):
             beginRecording(title: title)
-        case .seekToStart:
+        case .holdAtStart:
+            isHoldingStart = true
             if let chrome, let tab {
-                _ = try? chrome.execute(tab: tab, js: seekToStartJS)
+                _ = try? chrome.execute(tab: tab, js: holdAtStartJS)
+            }
+        case .playAfterDelay:
+            sessionQueue.asyncAfter(deadline: .now() + startDelaySeconds) { [weak self] in
+                self?.playAfterDelay()
             }
         case .openGate:
             ioQueue.async { [weak self] in

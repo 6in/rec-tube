@@ -3,3 +3,5 @@
 .build/
 *.m4a
 *.wav
+*.mp3
+*.recording.caf

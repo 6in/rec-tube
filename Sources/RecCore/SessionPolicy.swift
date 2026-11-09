@@ -145,14 +145,19 @@ public struct SessionPolicy: Sendable {
         firstID = result.id
         didStartRecording = true
 
-        var actions: [SessionAction] = [.startRecording(title: result.title)]
-        if result.kind == .main, result.state == .playing {
-            actions.append(.seekToStart)
+        // 本編が再生中か一時停止中なら、止めて頭出ししてから録音を始め、`startDelaySeconds` 後に再生する。
+        // gate は録音開始と同時に開く（待ちの無音も録音に入れる）。
+        // 警告（b5）はこの step では見ない。次の probe が同じ `result` 相当を見て判定する。
+        if result.kind == .main, result.state == .playing || result.state == .paused {
+            gateOpen = true
+            lastKind = result.kind
+            return [.holdAtStart, .startRecording(title: result.title), .openGate, .playAfterDelay]
         }
+
+        // 広告中と再生終了は頭出ししない。
         // 表の「以降は下の行を同じ step で適用」。特別扱いを足さず素直に連結する
         // （初回 `main ended` が `[.startRecording, .stop(.ended)]` になるのはこの結果）。
-        actions += apply(result, meter: meter, now: now)
-        return actions
+        return [.startRecording(title: result.title)] + apply(result, meter: meter, now: now)
     }
 
     // MARK: - フェーズ B（すでに `.startRecording` を出した）
